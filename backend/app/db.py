@@ -31,6 +31,34 @@ CREATE TABLE IF NOT EXISTS exercises (
  note TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_exercises_user_date ON exercises(user_id, exercise_date);
+CREATE TABLE IF NOT EXISTS mihealth_connections (
+ user_id TEXT PRIMARY KEY REFERENCES users(id),
+ encrypted_session TEXT NOT NULL,
+ linked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ last_synced_at TEXT
+);
+CREATE TABLE IF NOT EXISTS mihealth_challenges (
+ challenge_id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL REFERENCES users(id),
+ encrypted_state TEXT NOT NULL,
+ expires_at INTEGER NOT NULL,
+ attempts INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_mihealth_challenges_user_expiry ON mihealth_challenges(user_id, expires_at);
+CREATE TABLE IF NOT EXISTS mihealth_imports (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ user_id TEXT NOT NULL REFERENCES users(id),
+ source_id TEXT NOT NULL,
+ metric TEXT NOT NULL,
+ recorded_at TEXT NOT NULL,
+ value REAL,
+ unit TEXT NOT NULL DEFAULT '',
+ payload TEXT NOT NULL DEFAULT '{}',
+ UNIQUE(user_id, source_id, metric)
+);
+CREATE INDEX IF NOT EXISTS idx_mihealth_imports_user_time ON mihealth_imports(user_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_mihealth_imports_user_metric_time ON mihealth_imports(user_id, metric, recorded_at);
 """
 
 

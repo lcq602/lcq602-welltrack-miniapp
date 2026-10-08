@@ -52,3 +52,26 @@ class ExerciseIn(BaseModel):
 class WechatLoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str = Field(min_length=1, max_length=256)
+
+class MiHealthConnectIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=256)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value):
+        """剔除账号标识首尾空格并拒绝空白账号。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("小米账号不能为空")
+        return normalized
+
+class MiHealthVerifyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    challenge_id: str = Field(min_length=32, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    code: str = Field(min_length=4, max_length=10, pattern=r"^\d+$")
+
+class MiHealthSyncIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    days: int = Field(default=14, ge=1, le=90)

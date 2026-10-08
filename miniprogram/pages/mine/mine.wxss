@@ -1,1 +1,31 @@
-.link { color: #286c55; padding-top: 22rpx; font-size: 25rpx; }
+.profile-hero { display: flex; align-items: center; background: #141e35; border-radius: 26rpx; padding: 26rpx; color: #ffffff; margin-bottom: 22rpx; }
+.profile-stamp { display: flex; align-items: center; justify-content: center; width: 70rpx; height: 70rpx; border: 1rpx solid rgba(255,255,255,.35); border-radius: 23rpx; color: #d7fb58; font-family: Georgia, serif; font-size: 37rpx; margin-right: 18rpx; }
+.profile-title { font-size: 28rpx; font-weight: 700; }
+.profile-sub { color: rgba(255,253,245,.66); font-size: 19rpx; margin-top: 6rpx; }
+.profile-row { display: flex; align-items: center; justify-content: space-between; min-height: 66rpx; border-bottom: 1rpx solid #e9edf5; color: #64718a; font-size: 22rpx; }
+.profile-row > text:last-child { color: #26344e; font-weight: 650; }
+.profile-unit { color: #748099; font-weight: 400; }
+.profile-link { display: flex; align-items: center; justify-content: space-between; color: #315bff; padding: 21rpx 0 2rpx; font-size: 23rpx; font-weight: 650; }
+.mihealth-card { margin-top: 22rpx; }
+.mihealth-heading { display: flex; justify-content: space-between; align-items: flex-start; }
+.mihealth-heading .section-title { margin-bottom: 5rpx; }
+.connection-pill { padding: 8rpx 16rpx; color: #7d8799; background: #f0f2f6; border-radius: 99rpx; font-size: 19rpx; }
+.connection-on { color: #255d42; background: #e4f4e9; }
+.mihealth-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12rpx; margin-top: 23rpx; }
+.mihealth-metric { display: flex; justify-content: space-between; align-items: center; gap: 10rpx; min-height: 84rpx; padding: 0 16rpx; background: #f7f7f8; border-radius: 14rpx; color: #737985; font-size: 20rpx; }
+.mihealth-date { display: block; margin-top: 5rpx; color: #9a9ca2; font-size: 16rpx; }
+.mihealth-value { color: #1d2026; font-size: 22rpx; font-weight: 700; white-space: nowrap; }
+.mihealth-value text { color: #858a93; font-size: 17rpx; font-weight: 400; }
+.sync-caption { margin: 15rpx 0 4rpx; font-size: 18rpx; line-height: 1.5; }
+.mihealth-actions { display: flex; gap: 14rpx; margin-top: 16rpx; }
+page .mihealth-actions .button { flex: 1; width: auto; min-width: 0; height: 70rpx; min-height: 70rpx; margin: 0; padding: 0 10rpx; border-radius: 99rpx; font-size: 21rpx; line-height: 70rpx; }
+page .mihealth-actions .mihealth-action { background: #191a1f; }
+page .mihealth-actions .mihealth-unbind { color: #45464c; background: #ededee; }
+.mihealth-intro { line-height: 1.6; margin: 14rpx 0 21rpx; }
+.mihealth-form .input { margin-bottom: 18rpx; }
+.mihealth-notice { margin-top: 18rpx; padding: 18rpx; color: #725723; background: #fff5dc; border-radius: 14rpx; font-size: 21rpx; line-height: 1.6; }
+.mihealth-card .append-note { margin-top: 18rpx; line-height: 1.6; }
+.mihealth-code-panel { margin-top: 22rpx; padding: 22rpx; border-radius: 18rpx; background: #f7f7f8; }
+.mihealth-code-title { color: #1d2026; font-size: 28rpx; font-weight: 700; }
+.mihealth-code-hint, .mihealth-code-note { margin-top: 10rpx; line-height: 1.55; }
+.mihealth-code-input { margin-top: 8rpx; letter-spacing: 8rpx; }

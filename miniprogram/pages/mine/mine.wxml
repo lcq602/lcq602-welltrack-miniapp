@@ -1,1 +1,67 @@
-<view class="page"><view class="eyebrow">ACCOUNT &amp; DATA</view><view class="title">我的</view><view class="card"><view class="section-title">个人目标</view><view wx:if="{{profile}}"><view class="row"><text>管理方向</text><text class="pill">{{goalLabel}}</text></view><view class="row"><text class="muted">身高</text><text>{{profile.height_cm}} cm</text></view><view class="row"><text class="muted">目标体重</text><text>{{profile.target_weight}} kg</text></view><navigator url="/pages/plan/plan" class="link">调整计划与目标 ›</navigator></view><view wx:else class="muted">请先在首页完成设置</view></view><view class="card"><view class="row"><view><view class="section-title">提醒偏好</view><view class="muted">微信订阅消息需另配模板；此处保存提醒偏好。</view></view><switch checked="{{reminderEnabled}}" bindchange="onReminder" color="#286c55" /></view></view><view class="card"><view class="section-title">数据与连接</view><view class="muted">开发机 API 地址（手机调试时填写电脑局域网 IP）</view><input class="input" value="{{apiUrl}}" bindinput="onUrl"/><button class="button button-light" bindtap="saveUrl">保存 API 地址</button><button class="button button-light" bindtap="useWechatLogin">使用微信登录（需服务端配置）</button><button class="button" bindtap="exportCsv">导出 CSV</button><button class="button button-light" bindtap="exportBackup">导出 JSON 备份</button><view class="muted">基于当前数据安全规则，暂不提供导入覆盖与历史记录编辑/删除。</view></view><view class="muted">本地开发无需 AppID。服务端不会向小程序返回密钥。</view></view>
+<view class="page">
+  <view class="eyebrow">YOUR HEALTH SPACE</view>
+  <view class="title">我的</view>
+  <view class="profile-hero">
+    <view class="profile-stamp">W</view>
+    <view>
+      <view class="profile-title">{{loading ? '正在加载资料' : profile ? goalLabel : '欢迎来到轻衡'}}</view>
+      <view class="profile-sub">{{profile ? '你的个人健康管理目标' : '先在首页完成个人起点设置'}}</view>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-kicker">PERSONAL BASELINE</view>
+    <view class="section-title">基础信息</view>
+    <view wx:if="{{profile}}">
+      <view class="profile-row"><text>身高</text><text>{{profile.height_cm}} <text class="profile-unit">cm</text></text></view>
+      <view class="profile-row"><text>当前体重</text><text>{{miHealth.latest.weight.value || profile.current_weight}} <text class="profile-unit">kg</text></text></view>
+      <view wx:if="{{miHealth.latest.weight.value}}" class="muted">当前体重取自小米运动健康自动同步；计划起始基线保持不变。</view>
+      <view class="profile-row"><text>目标体重</text><text>{{profile.target_weight}} <text class="profile-unit">kg</text></text></view>
+      <view class="profile-row"><text>计划开始</text><text>{{profile.start_date}}</text></view>
+      <navigator url="/pages/plan/plan" class="profile-link">查看并调整计划 <text>→</text></navigator>
+    </view>
+    <view wx:elif="{{loading}}" class="initial-fetch"><view class="loading-orbit"><view class="loading-spark"></view></view><view class="loading-copy">正在读取个人资料</view></view>
+    <view wx:else class="empty">完成首次设置后，基础信息会显示在这里。</view>
+  </view>
+
+  <view class="card mihealth-card">
+    <view class="card-kicker">MI FITNESS · READ ONLY</view>
+    <view class="mihealth-heading">
+      <view><view class="section-title">小米运动健康</view><view class="muted">只读取本人健康摘要</view></view>
+      <view class="connection-pill {{miHealth.connected ? 'connection-on' : ''}}">{{miHealth.connected ? '已连接' : '未连接'}}</view>
+    </view>
+    <view wx:if="{{miHealth.connected}}">
+      <view class="mihealth-metrics">
+        <view class="mihealth-metric"><view><text>最近体重</text><text class="mihealth-date">{{miHealth.latest.weight.date_label}}</text></view><text class="mihealth-value">{{miHealth.latest.weight.value_label}}<text wx:if="{{miHealth.latest.weight.value !== null && miHealth.latest.weight.value !== undefined}}"> kg</text></text></view>
+        <view class="mihealth-metric"><view><text>最近睡眠</text><text class="mihealth-date">{{miHealth.latest.sleep_hours.date_label}}</text></view><text class="mihealth-value">{{miHealth.latest.sleep_hours.value_label}}<text wx:if="{{miHealth.latest.sleep_hours.value !== null && miHealth.latest.sleep_hours.value !== undefined}}"> h</text></text></view>
+        <view class="mihealth-metric"><view><text>最近步数</text><text class="mihealth-date">{{miHealth.latest.steps.date_label}}</text></view><text class="mihealth-value">{{miHealth.latest.steps.value_label}}<text wx:if="{{miHealth.latest.steps.value !== null && miHealth.latest.steps.value !== undefined}}"> 步</text></text></view>
+        <view class="mihealth-metric"><view><text>运动时长</text><text class="mihealth-date">{{miHealth.latest.workout_minutes.date_label}}</text></view><text class="mihealth-value">{{miHealth.latest.workout_minutes.value_label}}<text wx:if="{{miHealth.latest.workout_minutes.value !== null && miHealth.latest.workout_minutes.value !== undefined}}"> min</text></text></view>
+      </view>
+      <view class="muted sync-caption">体重自动更新；睡眠、步数和运动摘要需手动同步</view>
+      <view wx:if="{{!miHealth.ready}}" class="mihealth-notice">连接器或会话加密密钥未就绪；后端配置修复后才能继续同步。</view>
+      <view class="mihealth-actions">
+        <button class="button mihealth-action" loading="{{syncing}}" disabled="{{syncing || !miHealth.ready}}" bindtap="syncMiHealth">{{syncing ? '同步中…' : '手动同步摘要'}}</button>
+        <button class="button button-light mihealth-unbind" disabled="{{syncing}}" bindtap="unbindMiHealth">解除连接</button>
+      </view>
+    </view>
+    <view wx:elif="{{miHealth.ready}}" class="mihealth-form">
+      <view class="muted mihealth-intro">登录信息仅发送到本机后端，再由后端请求小米；小程序不会保存密码。</view>
+      <view wx:if="{{miHealthChallenge}}" class="mihealth-code-panel">
+        <view class="mihealth-code-title">输入小米{{miHealthChallenge.method === 'Email' ? '邮箱' : '短信'}}验证码</view>
+        <view class="muted mihealth-code-hint">验证码已发送至 {{miHealthChallenge.hint || '你的小米账号绑定方式'}}，10 分钟内有效。</view>
+        <text class="field-label">{{miHealthChallenge.method === 'Email' ? '邮箱验证码' : '短信验证码'}}</text>
+        <input class="input mihealth-code-input" type="number" maxlength="10" value="{{verificationCode}}" placeholder="输入收到的验证码" bindinput="onMiHealthCode" />
+        <button class="button mihealth-action" loading="{{connecting}}" disabled="{{connecting || !verificationCodeReady}}" bindtap="verifyMiHealthCode">{{connecting ? '正在验证…' : '确认并完成绑定'}}</button>
+        <view class="muted mihealth-code-note">验证码不会保存在本机数据库；验证状态已加密保存，还可尝试 {{miHealthChallenge.attempts_remaining}} 次。</view>
+      </view>
+      <view wx:else>
+        <text class="field-label">小米账号</text><input class="input" value="{{username}}" placeholder="手机号、邮箱或小米 ID" bindinput="onUsername" />
+        <text class="field-label">小米密码</text><input class="input" password value="{{password}}" placeholder="仅用于本次登录" bindinput="onPassword" />
+        <button class="button mihealth-action" loading="{{connecting}}" disabled="{{connecting}}" bindtap="connectMiHealth">{{connecting ? '正在连接…' : '连接我的账号'}}</button>
+      </view>
+    </view>
+    <view wx:elif="{{miHealth.enabled}}" class="mihealth-notice">连接器已启用，但后端没有有效的会话加密密钥，请检查后端 `.env`。</view>
+    <view wx:else class="mihealth-notice">本地连接器默认关闭。需要在后端 `.env` 显式启用后，才能连接小米账号。</view>
+    <view class="append-note">此为非官方实验性只读接口，可能因小米服务调整而失效；不会修改小米账号数据。请勿在聊天或截图中分享密码、令牌或健康记录。</view>
+  </view>
+</view>

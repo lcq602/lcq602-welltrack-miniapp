@@ -1,25 +1,77 @@
-<view class="page" wx:if="{{!loading}}">
-  <view class="eyebrow">WELLTRACK · 轻衡健康</view>
-  <view class="title">{{configured ? '今天也照顾好自己' : '建立你的健康计划'}}</view>
-  <view wx:if="{{!configured}}" class="card">
-    <view class="section-title">先了解你的起点</view>
-    <view class="muted">目标可以随时调整，关注长期趋势，不追求极端速度。</view>
-    <input class="input" type="digit" placeholder="身高（cm）" data-key="height_cm" bindinput="onInput" />
-    <input class="input" type="digit" placeholder="当前体重（kg）" data-key="current_weight" bindinput="onInput" />
-    <input class="input" type="digit" placeholder="目标体重（kg）" data-key="target_weight" bindinput="onInput" />
-    <picker mode="date" bindchange="onInput" data-key="start_date"><view class="input">计划开始日期：{{form.start_date || '选择日期'}}</view></picker>
-    <picker range="{{goalOptions}}" bindchange="onGoal"><view class="input">管理目标：{{goalLabel}}</view></picker>
-    <button class="button" bindtap="saveProfile">保存并开始</button>
+<view class="page" wx:if="{{dashboard}}">
+  <view class="page-head">
+    <view><view class="eyebrow">WELLTRACK · 每一点都算数</view><view class="title">{{configured ? '早上好，今天也慢慢来' : '建立我的健康起点'}}</view></view>
+    <view wx:if="{{configured}}" class="today-mark">今天<br/><text>{{dashboard.today_label}}</text></view>
   </view>
-  <block wx:if="{{configured}}">
-    <view class="card">
-      <view class="row"><view><view class="label">当前体重</view><view class="value">{{dashboard.current_weight || '--'}} <text class="label">kg</text></view></view><view><view class="label">目标 {{dashboard.target_weight}} kg</view><view class="pill">BMI参考 {{dashboard.bmi || '--'}}</view></view></view>
-      <view class="muted">BMI 仅供参考，不用于疾病诊断</view>
-      <view class="progress"><view class="progress-inner" style="width: {{dashboard.progress}}%;"></view></view>
-      <view class="muted">目标进度 {{dashboard.progress}}%</view>
+
+  <view wx:if="{{!configured}}" class="setup-panel">
+    <view class="setup-hero">
+      <view class="setup-art"><view class="setup-orbit setup-orbit-one"></view><view class="setup-orbit setup-orbit-two"></view><view class="setup-monogram">W</view></view>
+      <view class="setup-step">YOUR STARTING POINT　·　01 / 03</view>
+      <view class="setup-heading">从适合自己的节奏开始</view>
+      <view class="setup-copy">记录现在的状态，之后可以随时调整目标。</view>
     </view>
-    <view class="card"><view class="row"><view class="section-title">今天的小目标</view><view class="pill">周完成 {{dashboard.weekly_completion}}%</view></view><view wx:for="{{dashboard.todos}}" wx:key="*this" class="row"><text>{{item}}</text><text class="muted">○</text></view><button class="button" bindtap="openRecords">记录今天</button></view>
-    <view class="card"><view class="row"><view class="section-title">近 7 天体重</view><text class="muted">{{dashboard.exercise_count_7d}} 次运动</text></view><view wx:if="{{dashboard.records.length}}"><view wx:for="{{dashboard.records}}" wx:key="record_date" class="row"><text class="muted">{{item.record_date}}</text><text>{{item.weight || '--'}} kg</text></view></view><view wx:else class="muted">记录几天后，这里会显示你的趋势。</view></view>
-    <view class="row"><button class="button button-light" bindtap="openExercise">记录运动</button><button class="button button-light" bindtap="openRecords">饮食与习惯</button></view>
+    <view class="setup-form">
+      <view class="setup-field"><text class="field-label">身高</text><view class="setup-control"><input class="input setup-input" type="digit" placeholder="例如 168" data-key="height_cm" bindinput="onInput" /><text class="setup-unit">cm</text></view></view>
+      <view class="setup-grid">
+        <view class="setup-field"><text class="field-label">当前体重</text><view class="setup-control"><input class="input setup-input" type="digit" placeholder="例如 65" data-key="current_weight" bindinput="onInput" /><text class="setup-unit">kg</text></view></view>
+        <view class="setup-field"><text class="field-label">目标体重</text><view class="setup-control"><input class="input setup-input" type="digit" placeholder="例如 60" data-key="target_weight" bindinput="onInput" /><text class="setup-unit">kg</text></view></view>
+      </view>
+      <view class="setup-field"><text class="field-label">计划开始日期</text><picker mode="date" bindchange="onInput" data-key="start_date"><view class="setup-control setup-picker"><text>{{form.start_date || '选择开始日期'}}</text><text class="setup-arrow">›</text></view></picker></view>
+      <view class="setup-field"><text class="field-label">这阶段更关注</text><picker range="{{goalOptions}}" bindchange="onGoal"><view class="setup-control setup-picker"><text>{{goalLabel}}</text><text class="setup-arrow">⌄</text></view></picker></view>
+      <button class="button setup-submit" loading="{{saving}}" disabled="{{saving}}" bindtap="saveProfile">{{saving ? '正在建立…' : '创建我的健康计划'}}</button>
+      <view class="setup-reassurance"><view class="reassurance-mark">i</view><text>不追求极端速度，计划可以按你的生活节奏调整。</text></view>
+    </view>
+  </view>
+
+  <block wx:if="{{configured}}">
+    <view class="hero-card">
+      <view class="hero-top"><text class="hero-label">我的管理方向</text><text class="hero-tag">{{dashboard.goal_label}}</text></view>
+      <view class="hero-caption">当前体重</view>
+      <view class="hero-weight">{{dashboard.current_weight || '--'}}<text> kg</text></view>
+      <view wx:if="{{dashboard.current_weight_source === 'mihealth'}}" class="weight-source-note">数据来源：小米运动健康</view>
+      <view class="hero-bottom"><view><text class="hero-caption">{{dashboard.goal_key === 'maintenance' ? '体重参考值' : '目标体重'}}</text><text class="hero-target">{{dashboard.target_weight}} kg</text></view><view wx:if="{{dashboard.show_goal_progress}}" class="hero-progress-label">{{dashboard.progress_label}} {{dashboard.goal_progress}}%</view><view wx:else class="hero-progress-label">以稳定为主</view></view>
+      <view wx:if="{{dashboard.show_goal_progress}}" class="progress"><view class="progress-inner" style="width: {{dashboard.goal_progress}}%;"></view></view>
+      <view class="hero-foot">{{dashboard.goal_key === 'healthy_habits' ? '把运动、饮水、饮食与睡眠逐渐变成日常' : '持续记录，关注自己的变化趋势'}}</view>
+    </view>
+
+    <view class="journey-heading">开启你的健康旅程</view>
+    <scroll-view class="journey-scroll" scroll-x="true" enhanced="true" show-scrollbar="false">
+      <view class="journey-track">
+        <view class="journey-card">
+          <view class="journey-art art-body"><view class="art-orbit orbit-one"></view><view class="art-orbit orbit-two"></view><view class="art-core">W</view><view class="art-badge">START HERE</view></view>
+          <view class="journey-copy"><view class="journey-title">身体状态</view><view class="journey-desc">用体重、腰围和 BMI，建立自己的观察基线。</view><view class="journey-cta" bindtap="openRecords">开始记录 <text>→</text></view></view>
+        </view>
+        <view class="journey-card">
+          <view class="journey-art art-training"><view class="wave wave-one"></view><view class="wave wave-two"></view><view class="wave wave-three"></view><view class="art-badge">MOVE YOUR WAY</view></view>
+          <view class="journey-copy"><view class="journey-title">训练计划</view><view class="journey-desc">为这一周安排训练、散步和休息。</view><view class="journey-cta" bindtap="openPlan">查看周计划 <text>→</text></view></view>
+        </view>
+        <view class="journey-card">
+          <view class="journey-art art-progress"><view class="progress-shape shape-one"></view><view class="progress-shape shape-two"></view><view class="art-badge">YOUR OWN PACE</view></view>
+          <view class="journey-copy"><view class="journey-title">每一步都看得见</view><view class="journey-desc">复盘体重、腰围和日常习惯的变化。</view><view class="journey-cta" bindtap="openAnalysis">查看趋势 <text>→</text></view></view>
+        </view>
+      </view>
+    </scroll-view>
+
+    <view class="metric-row">
+      <view class="metric-card"><view class="metric-icon bmi-icon">BMI</view><view class="metric-number">{{dashboard.bmi || '--'}}</view><view class="metric-label">身体质量指数</view><view class="metric-hint">仅供参考</view></view>
+      <view class="metric-card"><view class="metric-icon week-icon">7D</view><view class="metric-number">{{dashboard.record_days_7d || 0}}<text class="metric-unit">/7</text></view><view class="metric-label">近 7 天记录</view><view class="metric-hint">运动 {{dashboard.exercise_count_7d}} 次</view></view>
+    </view>
+
+    <view class="section-heading"><view><view class="section-title">今天，照顾好自己</view><view class="muted">小行动比完美计划更重要</view></view><text class="section-count">{{dashboard.todos.length}} 项</text></view>
+    <view class="todo-card">
+      <view wx:for="{{dashboard.todos}}" wx:key="*this" class="todo-item"><view class="todo-dot"></view><text>{{item}}</text></view>
+      <view class="action-pair"><button class="action-button action-primary" bindtap="openRecords">＋ 记录今天</button><button class="action-button action-secondary" bindtap="openExercise">记一笔运动</button></view>
+    </view>
+
+    <view class="section-heading"><view><view class="section-title">体重的近况</view><view class="muted">近 7 天趋势 · 变化无需每天相同</view></view><navigator class="mini-link" url="/pages/analysis/analysis">看分析 →</navigator></view>
+    <view class="trend-card" wx:if="{{dashboard.trend.length}}">
+      <view class="trend-summary"><text class="trend-latest">{{dashboard.current_weight || '--'}}<text> kg</text></text><text class="muted">目标 {{dashboard.target_weight}} kg</text></view>
+      <view class="trend-bars"><view wx:for="{{dashboard.trend}}" wx:key="record_date" class="trend-col"><text class="trend-value">{{item.weight || ''}}</text><view class="trend-track"><view class="trend-bar {{item.has_record ? '' : 'trend-bar-empty'}}" style="height: {{item.bar_height}}rpx;"></view></view><text class="trend-date">{{item.day_label}}</text></view></view>
+    </view>
+    <view wx:else class="empty trend-card"><view class="empty-mark">↗</view>开始记录后，这里会逐渐出现你的体重趋势。</view>
+    <view class="health-note">BMI 与记录用于自我观察，不构成疾病诊断或减重速度承诺。</view>
   </block>
 </view>
+<view wx:elif="{{loading}}" class="loading-state"><view class="loading-orbit"><view class="loading-spark"></view></view><view class="loading-copy">把今天的状态慢慢整理好</view><view class="loading-caption">WELLTRACK · 正在同步</view></view>
+<view wx:else class="error-state"><view class="error-mark">!</view><view class="section-title">暂时连接不上</view><view class="muted">{{loadError}}</view><button class="button" bindtap="retryLoad">重新连接</button></view>

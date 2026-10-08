@@ -27,7 +27,8 @@
     "compileWorklet": false,
     "disableUseStrict": false,
     "minifyWXML": true,
-    "useCompilerPlugins": false
+    "useCompilerPlugins": false,
+    "urlCheck": false
   },
   "condition": {},
   "editorSetting": {

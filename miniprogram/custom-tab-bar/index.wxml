@@ -1,0 +1,6 @@
+<view class="tab-shell">
+  <view wx:for="{{list}}" wx:key="key" class="tab-item {{selected === index ? 'tab-item-active' : ''}}" data-index="{{index}}" bindtap="switchTab">
+    <view class="tab-icon {{selected === index ? 'tab-icon-selected' : ''}}">{{item.icon}}</view>
+    <text class="tab-label">{{item.text}}</text>
+  </view>
+</view>

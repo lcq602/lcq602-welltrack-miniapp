@@ -10,12 +10,13 @@
   "window": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "轻衡健康",
-    "navigationBarBackgroundColor": "#f6f8f4",
-    "backgroundColor": "#f6f8f4"
+    "navigationBarBackgroundColor": "#f3f6fc",
+    "backgroundColor": "#f3f6fc"
   },
   "tabBar": {
-    "color": "#78847b",
-    "selectedColor": "#286c55",
+    "custom": true,
+    "color": "#748099",
+    "selectedColor": "#315bff",
     "backgroundColor": "#ffffff",
     "borderStyle": "white",
     "list": [

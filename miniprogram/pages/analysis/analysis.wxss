@@ -1,1 +1,56 @@
-.chart { display: flex; align-items: flex-end; justify-content: space-around; height: 200rpx; margin: 24rpx 0 12rpx; }.bar-wrap { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-width: 58rpx; }.bar { width: 26rpx; border-radius: 10rpx 10rpx 2rpx 2rpx; background: #80ae8b; }.tiny { font-size: 18rpx; color: #718077; }.history { padding: 12rpx 0; font-size: 22rpx; }
+.period-switch { display: flex; padding: 6rpx; background: #e3e8f2; border-radius: 15rpx; margin: 8rpx 0 20rpx; }
+.period-option { flex: 1; text-align: center; color: #748099; padding: 14rpx 0; font-size: 22rpx; border-radius: 12rpx; }
+.period-active { color: #26344e; background: #ffffff; font-weight: 700; box-shadow: 0 3rpx 9rpx rgba(31,62,157,.1); }
+.report-caption { color: #748099; font-size: 20rpx; margin: 0 4rpx 12rpx; }
+.summary-grid { display: flex; flex-wrap: wrap; gap: 12rpx; margin-bottom: 20rpx; }
+.summary-tile { box-sizing: border-box; width: calc(50% - 6rpx); background: #ffffff; border: 1rpx solid #e3e8f2; border-radius: 21rpx; padding: 20rpx; }
+.summary-figure { color: #26344e; font-size: 41rpx; line-height: 1.1; font-weight: 750; }
+.figure-unit { color: #748099; font-size: 19rpx; margin-left: 4rpx; font-weight: 500; }
+.summary-label { color: #64718a; font-size: 20rpx; margin-top: 8rpx; }
+.summary-foot { color: #748099; font-size: 17rpx; margin-top: 7rpx; }
+.summary-wide { position: relative; width: 100%; display: flex; justify-content: space-between; align-items: center; padding-bottom: 38rpx; }
+.habit-meter { position: absolute; left: 20rpx; right: 20rpx; bottom: 15rpx; height: 7rpx; background: #edf1f8; border-radius: 9rpx; overflow: hidden; }
+.habit-meter-fill { height: 100%; border-radius: 9rpx; background: #d7fb58; }
+.trend-report-head,.calendar-head { display: flex; justify-content: space-between; align-items: center; }
+.trend-report-head .section-title { margin: 0 0 6rpx; }
+.trend-legend,.calendar-legend { display: flex; align-items: center; gap: 8rpx; color: #748099; font-size: 17rpx; }
+.legend-weight,.legend-dot { width: 11rpx; height: 11rpx; border-radius: 50%; background: #315bff; }
+.trend-list { margin-top: 24rpx; }
+.trend-row { display: flex; align-items: center; min-height: 66rpx; border-top: 1rpx solid #e9edf5; gap: 12rpx; }
+.trend-date { width: 72rpx; color: #748099; font-size: 18rpx; }
+.trend-row .trend-track { flex: 1; height: 12rpx; background: #edf1f8; border-radius: 99rpx; overflow: hidden; }
+.trend-weight-bar { height: 100%; border-radius: 99rpx; background: #315bff; }
+.trend-row .trend-value { width: 105rpx; height: auto; text-align: right; color: #465574; font-size: 18rpx; }
+.waist-value { width: 112rpx; text-align: right; color: #748099; font-size: 17rpx; }
+.calendar-nav { display: flex; gap: 20rpx; color: #315bff; font-size: 38rpx; }
+.calendar-nav text { width: 45rpx; height: 45rpx; text-align: center; line-height: 40rpx; background: #edf1f8; border-radius: 50%; }
+.calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); margin-top: 17rpx; row-gap: 7rpx; }
+.calendar-weekday,.calendar-cell { min-height: 61rpx; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #64718a; font-size: 20rpx; }
+.calendar-weekday { min-height: 43rpx; color: #748099; font-size: 17rpx; }
+.calendar-cell { position: relative; border-radius: 15rpx; }
+.calendar-empty { visibility: hidden; }
+.calendar-today { color: #ffffff; background: #315bff; font-weight: 700; }
+.calendar-recorded { color: #2848d8; background: #eaf0ff; font-weight: 700; }
+.calendar-dot { position: absolute; bottom: 5rpx; width: 7rpx; height: 7rpx; border-radius: 50%; background: #315bff; }
+.calendar-today .calendar-dot { background: #d7fb58; }
+.calendar-legend { justify-content: flex-start; margin-top: 17rpx; }
+.calendar-legend .muted { margin-left: auto; font-size: 18rpx; }
+.health-note { color: #748099; text-align: center; font-size: 19rpx; line-height: 1.7; padding: 8rpx 10rpx 0; }
+.loading-state { padding: 130rpx 0; color: #748099; text-align: center; font-size: 23rpx; }
+.loading-dot { width: 14rpx; height: 14rpx; border-radius: 50%; background: #315bff; margin: 0 auto 20rpx; }
+.error-state { padding: 30rpx; text-align: center; background: #ffffff; border: 1rpx solid #e3e8f2; border-radius: 24rpx; }
+.line-chart { margin-top: 28rpx; padding: 20rpx 0 12rpx; border-top: 1rpx solid #e9edf5; }
+.chart-heading { display: flex; justify-content: space-between; align-items: baseline; padding-left: 68rpx; }
+.chart-name { color: #26344e; font-size: 23rpx; font-weight: 700; }
+.chart-name text,.chart-range { color: #748099; font-size: 17rpx; font-weight: 400; }
+.plot { position: relative; height: 168rpx; margin: 12rpx 0 0 68rpx; }
+.gridline { position: absolute; left: 0; right: 0; height: 1rpx; background: #e9edf5; }
+.gridline-top { top: 18rpx; }.gridline-middle { top: 84rpx; border-top: 1rpx dashed #e1e7f1; background: transparent; }.gridline-bottom { top: 150rpx; }
+.axis-label { position: absolute; left: -68rpx; width: 56rpx; color: #8994a8; text-align: right; font-size: 16rpx; }
+.axis-high { top: 8rpx; }.axis-low { top: 140rpx; }
+.chart-segment { position: absolute; height: 4rpx; border-radius: 8rpx; transform-origin: 0 50%; background: #315bff; z-index: 1; }
+.chart-point { position: absolute; z-index: 2; width: 14rpx; height: 14rpx; margin: -7rpx 0 0 -7rpx; border: 4rpx solid #ffffff; border-radius: 50%; background: #315bff; box-shadow: 0 0 0 2rpx #315bff; }
+.point-tooltip { display: none; }
+.waist-chart .chart-segment { background: #667c12; }.waist-chart .chart-point { background: #667c12; box-shadow: 0 0 0 2rpx #667c12; }
+.date-axis { position: relative; height: 24rpx; margin-left: 68rpx; }
+.date-axis text { position: absolute; transform: translateX(-50%); color: #8994a8; font-size: 15rpx; white-space: nowrap; }

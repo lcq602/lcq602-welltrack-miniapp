@@ -9,3 +9,4 @@ backend/data/
 *.csv
 *.json.bak
 miniprogram/project.private.config.json
+project.private.config.json

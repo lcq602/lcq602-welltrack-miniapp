@@ -1,0 +1,15 @@
+.move-hero { position: relative; min-height: 220rpx; background: #e5ebf8; border-radius: 28rpx; padding: 27rpx; overflow: hidden; margin-bottom: 22rpx; }
+.move-orbit { position: absolute; right: 30rpx; top: 23rpx; width: 116rpx; height: 116rpx; border: 1rpx solid #a9b4c8; border-radius: 50%; color: #315bff; display: flex; align-items: center; justify-content: center; font-size: 55rpx; transform: rotate(-20deg); }
+.move-orbit::after { content: ''; position: absolute; width: 155rpx; height: 62rpx; border: 1rpx solid #b8c4dc; border-radius: 50%; transform: rotate(35deg); }
+.move-headline { color: #26344e; font-size: 36rpx; line-height: 1.25; font-weight: 750; }
+.move-sub { color: #64718a; font-size: 21rpx; margin-top: 12rpx; max-width: 390rpx; }
+.duration-wrap { display: flex; align-items: center; justify-content: space-between; background: #f7f8fc; border: 1rpx solid #e3e8f2; border-radius: 17rpx; padding: 7rpx 18rpx; margin-top: 8rpx; }
+.duration-wrap .field-label { margin: 9rpx 0 0; }
+.duration-hint { color: #748099; font-size: 19rpx; margin: 5rpx 0 9rpx; }
+.duration-input { width: 180rpx; text-align: right; padding: 17rpx 0; font-size: 32rpx; color: #26344e; }
+.exercise-item { display: flex; align-items: center; background: #ffffff; border: 1rpx solid #e3e8f2; border-radius: 20rpx; padding: 18rpx; margin: 12rpx 0; }
+.exercise-mark { width: 65rpx; height: 65rpx; border-radius: 19rpx; background: #eaf0ff; color: #315bff; display: flex; align-items: center; justify-content: center; font-weight: 750; font-size: 22rpx; margin-right: 17rpx; }
+.exercise-info { flex: 1; min-width: 0; }
+.exercise-name { color: #26344e; font-size: 24rpx; font-weight: 650; margin-bottom: 5rpx; }
+.exercise-duration { color: #26344e; font-size: 29rpx; font-weight: 750; }
+.exercise-duration text { color: #748099; font-size: 18rpx; font-weight: 500; margin-left: 3rpx; }

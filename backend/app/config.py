@@ -7,3 +7,5 @@ LOCAL_AUTH_ENABLED = os.getenv("WELLTRACK_LOCAL_AUTH", "true").lower() == "true"
 WECHAT_APP_ID = os.getenv("WECHAT_APP_ID", "")
 WECHAT_APP_SECRET = os.getenv("WECHAT_APP_SECRET", "")
 CORS_ORIGINS = [item.strip() for item in os.getenv("WELLTRACK_CORS_ORIGINS", "*").split(",") if item.strip()]
+MIHEALTH_ENABLED = os.getenv("MIHEALTH_ENABLED", "false").lower() == "true"
+MIHEALTH_TOKEN_KEY = os.getenv("MIHEALTH_TOKEN_KEY", "")

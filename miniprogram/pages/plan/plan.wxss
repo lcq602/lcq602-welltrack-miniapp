@@ -1,1 +1,11 @@
-.compact { width: 200rpx; text-align: right; margin: 0; background: transparent; }.schedule { margin-top: 14rpx; }
+.plan-intro { display: flex; align-items: center; background: #eaf0ff; border-left: 8rpx solid #315bff; border-radius: 23rpx; padding: 22rpx; margin: 8rpx 0 24rpx; }
+.plan-sun { width: 62rpx; height: 62rpx; border-radius: 20rpx; background: #dce6ff; display: flex; align-items: center; justify-content: center; color: #315bff; font-size: 35rpx; margin-right: 18rpx; }
+.plan-intro-title { color: #26344e; font-size: 25rpx; font-weight: 700; margin-bottom: 5rpx; }
+.plan-grid { display: flex; gap: 18rpx; }
+.plan-grid > view { flex: 1; min-width: 0; }
+.schedule-row { display: flex; align-items: center; justify-content: space-between; padding: 14rpx 0; border-bottom: 1rpx solid #e9edf5; }
+.day-badge { width: 76rpx; color: #64718a; font-size: 22rpx; }
+.schedule-choice { min-width: 260rpx; display: flex; align-items: center; justify-content: space-between; background: #f0f3fb; border-radius: 14rpx; padding: 17rpx 18rpx; color: #2848d8; font-size: 23rpx; }
+.choice-arrow { color: #748099; margin-left: 20rpx; }
+.append-note { color: #748099; font-size: 19rpx; line-height: 1.6; text-align: center; margin: 16rpx 8rpx 0; }
+.setup-needed .mini-link { display: block; margin-top: 18rpx; }

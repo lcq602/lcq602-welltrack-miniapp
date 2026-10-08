@@ -1,1 +1,15 @@
-<view class="page"><view class="eyebrow">MOVE AT YOUR PACE</view><view class="title">运动计划</view><view class="card"><view class="section-title">安排运动</view><picker mode="date" value="{{exercise_date}}" bindchange="onInput" data-key="exercise_date"><view class="input">日期：{{exercise_date}}</view></picker><picker range="{{['有氧','力量训练','步行','拉伸','休息']}}" bindchange="onKind"><view class="input">运动类型：{{kind}}</view></picker><input class="input" type="number" placeholder="时长（分钟）" data-key="duration" bindinput="onInput"/><input class="input" placeholder="备注" data-key="note" bindinput="onInput"/><button class="button" bindtap="save">添加运动</button></view><view class="section-title">运动记录</view><view wx:for="{{items}}" wx:key="id" class="card"><view class="row"><text>{{item.kind}}</text><text class="pill">{{item.duration_minutes}} 分钟</text></view><view class="muted">{{item.exercise_date}} · {{item.note}}</view></view></view>
+<view class="page">
+  <view class="eyebrow">MOVEMENT, YOUR WAY</view><view class="title">运动</view>
+  <view class="move-hero"><view class="move-orbit">↗</view><view class="move-headline">动一动，<br/>就是进展。</view><view class="move-sub">散步、训练或拉伸，选择适合今天的方式。</view></view>
+  <view class="card">
+    <view class="section-title">记录一次活动</view><view class="muted section-note">按实际完成情况记录，不需要达到固定强度。</view>
+    <text class="field-label">日期</text><picker mode="date" value="{{exercise_date}}" bindchange="onInput" data-key="exercise_date"><view class="input picker-field">{{exercise_date}}<text>⌄</text></view></picker>
+    <text class="field-label">活动类型</text><picker range="{{kindOptions}}" value="{{kindIndex}}" bindchange="onKind"><view class="input picker-field">{{kind}}<text>⌄</text></view></picker>
+    <view class="duration-wrap"><view><view class="field-label">活动时长</view><view class="duration-hint">分钟</view></view><input class="duration-input" type="number" placeholder="30" data-key="duration" bindinput="onInput" /></view>
+    <text class="field-label">备注 · 选填</text><input class="input" placeholder="例如：公园散步，感觉轻松" data-key="note" bindinput="onInput" />
+    <button class="button" loading="{{saving}}" disabled="{{saving}}" bindtap="save">{{saving ? '正在保存…' : '记下这次活动'}}</button>
+  </view>
+  <view class="history-head"><view><view class="section-title">活动记录</view><view class="muted">{{items.length}} 次活动</view></view><text class="history-icon">✳</text></view>
+  <view wx:if="{{items.length}}"><view wx:for="{{items}}" wx:key="id" class="exercise-item"><view class="exercise-mark">{{item.kind === '力量训练' ? '力' : '动'}}</view><view class="exercise-info"><view class="exercise-name">{{item.kind}}</view><view class="muted">{{item.note_text}}</view></view><view class="exercise-duration">{{item.duration_minutes}}<text>分</text></view></view></view>
+  <view wx:elif="{{loading && !hasLoaded}}" class="history-card initial-fetch"><view class="loading-orbit"><view class="loading-spark"></view></view><view class="loading-copy">正在整理运动记录</view></view><view wx:else class="empty history-card">记录过的活动会整理在这里。</view>
+</view>

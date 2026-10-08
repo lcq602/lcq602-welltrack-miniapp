@@ -6,11 +6,11 @@
 - `backend/`：FastAPI、SQLite schema、uv 环境、锁文件和后端启动脚本。
 - `docs/`：设计说明、实施计划与修改记录。
 
-后端启动与 API 文档见 [backend/README.md](backend/README.md)。
+后端启动与接口文档见 [backend/README.md](backend/README.md) 和 [backend/API.md](backend/API.md)。
 
 ## 微信开发者工具
 
-1. 导入 `miniprogram/`，使用测试号/游客模式，无需真实 AppID。
+1. 可直接导入项目根目录（根配置会把源码指向 `miniprogram/`），或直接导入 `miniprogram/`；使用无 AppID/游客模式即可。
 2. 在“详情 → 本地设置”勾选“不校验合法域名、web-view（业务域名）、TLS 版本以及 HTTPS 证书”。
 3. 模拟器 API 地址为 `http://127.0.0.1:8000`。真机调试时，在小程序“我的”页填写电脑局域网地址，例如 `http://192.168.1.20:8000`；电脑防火墙需要允许本地网络访问 8000 端口。
 
