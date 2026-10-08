@@ -1,0 +1,2 @@
+.grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14rpx; }.wrap { flex-wrap: wrap; justify-content: flex-start; }.small { font-size: 30rpx; }
+.pill-selected { background: #d8eadb; color: #215a42; }

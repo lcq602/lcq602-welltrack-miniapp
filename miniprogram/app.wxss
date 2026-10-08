@@ -1,0 +1,17 @@
+page { background: #f6f8f4; color: #25372d; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+.page { padding: 28rpx 30rpx 54rpx; }
+.eyebrow { font-size: 23rpx; color: #728178; letter-spacing: 2rpx; }
+.title { font-size: 42rpx; font-weight: 700; margin: 12rpx 0 24rpx; }
+.card { background: #fff; border-radius: 28rpx; padding: 28rpx; margin: 18rpx 0; box-shadow: 0 8rpx 30rpx rgba(35, 65, 46, .045); }
+.row { display: flex; align-items: center; justify-content: space-between; }
+.label { color: #718077; font-size: 25rpx; }
+.value { font-size: 38rpx; font-weight: 650; }
+.muted { color: #87938a; font-size: 23rpx; }
+.button { background: #286c55; color: white; border-radius: 18rpx; font-size: 28rpx; margin: 18rpx 0; }
+.button-light { background: #e7f1e9; color: #286c55; }
+.input { background: #f6f8f4; border-radius: 14rpx; padding: 20rpx; margin: 10rpx 0 20rpx; font-size: 27rpx; }
+.section-title { font-size: 30rpx; font-weight: 650; margin: 12rpx 0; }
+.pill { display: inline-block; padding: 10rpx 18rpx; background: #edf4ed; color: #39725b; border-radius: 99rpx; margin: 8rpx; font-size: 23rpx; }
+.progress { height: 14rpx; border-radius: 9rpx; background: #edf0eb; margin-top: 16rpx; overflow: hidden; }
+.progress-inner { height: 100%; background: #72a887; border-radius: 9rpx; }
+.line { height: 2rpx; background: #eff1ed; margin: 18rpx 0; }

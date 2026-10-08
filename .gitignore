@@ -1,0 +1,11 @@
+.venv/
+backend/.venv/
+__pycache__/
+.pytest_cache/
+.env
+backend/data/
+*.sqlite3
+*.db
+*.csv
+*.json.bak
+miniprogram/project.private.config.json

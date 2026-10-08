@@ -1,0 +1,25 @@
+<view class="page" wx:if="{{!loading}}">
+  <view class="eyebrow">WELLTRACK · 轻衡健康</view>
+  <view class="title">{{configured ? '今天也照顾好自己' : '建立你的健康计划'}}</view>
+  <view wx:if="{{!configured}}" class="card">
+    <view class="section-title">先了解你的起点</view>
+    <view class="muted">目标可以随时调整，关注长期趋势，不追求极端速度。</view>
+    <input class="input" type="digit" placeholder="身高（cm）" data-key="height_cm" bindinput="onInput" />
+    <input class="input" type="digit" placeholder="当前体重（kg）" data-key="current_weight" bindinput="onInput" />
+    <input class="input" type="digit" placeholder="目标体重（kg）" data-key="target_weight" bindinput="onInput" />
+    <picker mode="date" bindchange="onInput" data-key="start_date"><view class="input">计划开始日期：{{form.start_date || '选择日期'}}</view></picker>
+    <picker range="{{goalOptions}}" bindchange="onGoal"><view class="input">管理目标：{{goalLabel}}</view></picker>
+    <button class="button" bindtap="saveProfile">保存并开始</button>
+  </view>
+  <block wx:if="{{configured}}">
+    <view class="card">
+      <view class="row"><view><view class="label">当前体重</view><view class="value">{{dashboard.current_weight || '--'}} <text class="label">kg</text></view></view><view><view class="label">目标 {{dashboard.target_weight}} kg</view><view class="pill">BMI参考 {{dashboard.bmi || '--'}}</view></view></view>
+      <view class="muted">BMI 仅供参考，不用于疾病诊断</view>
+      <view class="progress"><view class="progress-inner" style="width: {{dashboard.progress}}%;"></view></view>
+      <view class="muted">目标进度 {{dashboard.progress}}%</view>
+    </view>
+    <view class="card"><view class="row"><view class="section-title">今天的小目标</view><view class="pill">周完成 {{dashboard.weekly_completion}}%</view></view><view wx:for="{{dashboard.todos}}" wx:key="*this" class="row"><text>{{item}}</text><text class="muted">○</text></view><button class="button" bindtap="openRecords">记录今天</button></view>
+    <view class="card"><view class="row"><view class="section-title">近 7 天体重</view><text class="muted">{{dashboard.exercise_count_7d}} 次运动</text></view><view wx:if="{{dashboard.records.length}}"><view wx:for="{{dashboard.records}}" wx:key="record_date" class="row"><text class="muted">{{item.record_date}}</text><text>{{item.weight || '--'}} kg</text></view></view><view wx:else class="muted">记录几天后，这里会显示你的趋势。</view></view>
+    <view class="row"><button class="button button-light" bindtap="openExercise">记录运动</button><button class="button button-light" bindtap="openRecords">饮食与习惯</button></view>
+  </block>
+</view>
