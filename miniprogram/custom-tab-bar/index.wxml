@@ -1,6 +1,16 @@
-<view class="tab-shell">
-  <view wx:for="{{list}}" wx:key="key" class="tab-item {{selected === index ? 'tab-item-active' : ''}}" data-index="{{index}}" bindtap="switchTab">
-    <view class="tab-icon {{selected === index ? 'tab-icon-selected' : ''}}">{{item.icon}}</view>
-    <text class="tab-label">{{item.text}}</text>
+<view class="tab-wrapper">
+  <view class="tab-dock">
+    <view 
+      wx:for="{{list}}" 
+      wx:key="key" 
+      class="tab-item {{selected === index ? 'tab-item-active' : ''}}" 
+      data-index="{{index}}" 
+      bindtap="switchTab"
+    >
+      <view class="tab-icon-pill {{selected === index ? 'tab-icon-pill-active' : ''}}">
+        <image class="tab-icon-img" src="{{selected === index ? item.iconActive : item.iconInactive}}" mode="aspectFit" />
+      </view>
+      <text class="tab-label {{selected === index ? 'tab-label-active' : ''}}">{{item.text}}</text>
+    </view>
   </view>
 </view>

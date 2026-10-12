@@ -201,8 +201,11 @@ def read_mihealth_metrics(session: dict, start_ms: int, end_ms: int) -> list[dic
         region=session.get("region", "cn"), min_interval=0.5, timeout=12, max_retries=1,
     )
     readings = []
-    for key in ("weight", "sleep", "steps"):
-        result = client.get_fitness_data_all(key, start_ms, end_ms, max_pages=40)
+    for key in ("weight", "sleep", "steps", "calories"):
+        try:
+            result = client.get_fitness_data_all(key, start_ms, end_ms, max_pages=40)
+        except (KeyError, TypeError, AttributeError):
+            continue
         if result.get("has_more"):
             raise MiHealthError("小米健康记录较多，请缩短同步日期范围后重试")
         items = result.get("data_list", [])
@@ -220,6 +223,16 @@ def read_mihealth_metrics(session: dict, start_ms: int, end_ms: int) -> list[dic
                     "sleep_deep_duration", "sleep_light_duration", "sleep_rem_duration"
                 ))
                 metric, value, unit = "sleep_hours", round(mins / 60, 2), "h"
+            elif key == "calories":
+                cal = detail.get("calories") if detail.get("calories") is not None else (detail.get("energy") if detail.get("energy") is not None else detail.get("calorie"))
+                if isinstance(cal, (int, float)) and cal >= 0:
+                    readings.append({
+                        "source_id": f"calories:{item.get('sid', 'xiaomi')}:{timestamp}",
+                        "metric": "calories", "recorded_at": recorded_at,
+                        "value": round(float(cal), 1), "unit": "kcal",
+                        "payload": detail,
+                    })
+                continue
             else:
                 count = detail.get("steps")
                 if isinstance(count, (int, float)) and count >= 0:
@@ -246,12 +259,21 @@ def read_mihealth_metrics(session: dict, start_ms: int, end_ms: int) -> list[dic
         if not recorded_at or not isinstance(duration, (int, float)) or duration <= 0:
             continue
         activity = str(detail.get("sport_type") or item.get("category") or item.get("key") or "运动")[:40]
+        cal = detail.get("calories") or detail.get("calorie")
+        cal_val = round(float(cal), 1) if isinstance(cal, (int, float)) and cal > 0 else None
         readings.append({
             "source_id": f"workout:{item.get('sid', 'xiaomi')}:{item.get('time')}:{item.get('key', '')}",
             "metric": "workout_minutes", "recorded_at": recorded_at,
             "value": round(duration / 60, 1), "unit": "min",
-            "payload": {"kind": activity, "duration_seconds": duration},
+            "payload": {"kind": activity, "duration_seconds": duration, "calories": cal_val},
         })
+        if cal_val:
+            readings.append({
+                "source_id": f"workout_cal:{item.get('sid', 'xiaomi')}:{item.get('time')}:{item.get('key', '')}",
+                "metric": "calories", "recorded_at": recorded_at,
+                "value": cal_val, "unit": "kcal",
+                "payload": {"kind": activity, "from_workout": True},
+            })
     return readings
 
 

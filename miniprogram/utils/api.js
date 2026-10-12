@@ -1,11 +1,22 @@
-const API_DEFAULT = 'http://127.0.0.1:8000'
+const API_DEFAULT = 'https://qelora.art'
+const LEGACY_LOCAL_API = [
+  'http://127.0.0.1:8000',
+  'http://localhost:8000',
+  'http://140.143.235.93:8000'
+]
+
+// 使用统一默认地址，并迁移旧版保存在本机的 localhost 配置。
+function getApiBase() {
+  const saved = String(wx.getStorageSync('welltrack_api') || '').replace(/\/$/, '')
+  return !saved || LEGACY_LOCAL_API.includes(saved) ? API_DEFAULT : saved
+}
 
 function request(path, method = 'GET', data) {
   // 发送带当前会话令牌的 HTTP 请求。
   return new Promise((resolve, reject) => {
     const token = wx.getStorageSync('welltrack_token')
     wx.request({
-      url: (wx.getStorageSync('welltrack_api') || API_DEFAULT) + path,
+      url: getApiBase() + path,
       method,
       data,
       header: token ? { Authorization: `Bearer ${token}` } : {},
@@ -41,4 +52,4 @@ async function api(path, method = 'GET', data) {
   }
 }
 
-module.exports = { api }
+module.exports = { api, getApiBase, API_DEFAULT }

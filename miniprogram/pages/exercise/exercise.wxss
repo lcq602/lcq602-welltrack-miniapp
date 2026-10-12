@@ -1,15 +1,262 @@
-.move-hero { position: relative; min-height: 220rpx; background: #e5ebf8; border-radius: 28rpx; padding: 27rpx; overflow: hidden; margin-bottom: 22rpx; }
-.move-orbit { position: absolute; right: 30rpx; top: 23rpx; width: 116rpx; height: 116rpx; border: 1rpx solid #a9b4c8; border-radius: 50%; color: #315bff; display: flex; align-items: center; justify-content: center; font-size: 55rpx; transform: rotate(-20deg); }
-.move-orbit::after { content: ''; position: absolute; width: 155rpx; height: 62rpx; border: 1rpx solid #b8c4dc; border-radius: 50%; transform: rotate(35deg); }
-.move-headline { color: #26344e; font-size: 36rpx; line-height: 1.25; font-weight: 750; }
-.move-sub { color: #64718a; font-size: 21rpx; margin-top: 12rpx; max-width: 390rpx; }
-.duration-wrap { display: flex; align-items: center; justify-content: space-between; background: #f7f8fc; border: 1rpx solid #e3e8f2; border-radius: 17rpx; padding: 7rpx 18rpx; margin-top: 8rpx; }
-.duration-wrap .field-label { margin: 9rpx 0 0; }
-.duration-hint { color: #748099; font-size: 19rpx; margin: 5rpx 0 9rpx; }
-.duration-input { width: 180rpx; text-align: right; padding: 17rpx 0; font-size: 32rpx; color: #26344e; }
-.exercise-item { display: flex; align-items: center; background: #ffffff; border: 1rpx solid #e3e8f2; border-radius: 20rpx; padding: 18rpx; margin: 12rpx 0; }
-.exercise-mark { width: 65rpx; height: 65rpx; border-radius: 19rpx; background: #eaf0ff; color: #315bff; display: flex; align-items: center; justify-content: center; font-weight: 750; font-size: 22rpx; margin-right: 17rpx; }
-.exercise-info { flex: 1; min-width: 0; }
-.exercise-name { color: #26344e; font-size: 24rpx; font-weight: 650; margin-bottom: 5rpx; }
-.exercise-duration { color: #26344e; font-size: 29rpx; font-weight: 750; }
-.exercise-duration text { color: #748099; font-size: 18rpx; font-weight: 500; margin-left: 3rpx; }
+/* ==========================================================================
+   WellTrack 运动打卡样式 (Stitch "Serene Balance" 运动活动记录)
+   ========================================================================== */
+
+/* 运动语录卡片 */
+.move-quote-card {
+  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
+  border: 1.5rpx solid rgba(37, 99, 235, 0.18);
+  display: flex;
+  gap: 20rpx;
+  align-items: flex-start;
+  padding: 28rpx 30rpx;
+}
+
+.move-spark {
+  width: 52rpx;
+  height: 52rpx;
+  border-radius: 18rpx;
+  background: #dbeafe;
+  color: #2563eb;
+  font-size: 26rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.move-quote-copy {
+  display: flex;
+  flex-direction: column;
+}
+
+.quote-title {
+  font-size: 28rpx;
+  font-weight: 750;
+  color: #0f172a;
+}
+
+.quote-desc {
+  font-size: 22rpx;
+  color: #64748b;
+  line-height: 1.5;
+  margin-top: 6rpx;
+}
+
+/* 录入卡片 */
+.exercise-form-card {
+  padding: 36rpx 32rpx;
+}
+
+.picker-val {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.picker-icon {
+  font-size: 24rpx;
+  color: #94a3b8;
+}
+
+/* 类型分段胶囊 */
+.kind-chips-row {
+  display: flex;
+  gap: 14rpx;
+  margin: 12rpx 0 24rpx;
+}
+
+.kind-chip {
+  flex: 1;
+  height: 74rpx;
+  border-radius: 9999rpx;
+  background: #f8fafc;
+  border: 1.5rpx solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #475569;
+  transition: all 0.2s ease;
+}
+
+.kind-chip:active {
+  transform: scale(0.96);
+}
+
+.kind-chip-active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 6rpx 18rpx rgba(37, 99, 235, 0.25);
+  font-weight: 700;
+}
+
+/* 时长录入卡片 */
+.duration-tile {
+  background: #f8fafc;
+  border: 1.5rpx solid #e2e8f0;
+  border-radius: 24rpx;
+  padding: 22rpx 24rpx;
+  margin: 12rpx 0 20rpx;
+  box-sizing: border-box;
+}
+
+.duration-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tile-label {
+  font-size: 22rpx;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.duration-hint {
+  font-size: 20rpx;
+  color: #94a3b8;
+}
+
+.duration-control {
+  position: relative;
+  margin-top: 10rpx;
+  display: flex;
+  align-items: baseline;
+}
+
+.duration-input {
+  background: transparent !important;
+  border: none !important;
+  font-size: 46rpx !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+  padding: 0 !important;
+  min-height: 56rpx !important;
+  height: 56rpx !important;
+}
+
+.duration-unit {
+  position: absolute;
+  right: 0;
+  bottom: 8rpx;
+  font-size: 24rpx;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.save-move-btn {
+  margin-top: 36rpx;
+  width: 100% !important;
+}
+
+/* 历史列表 */
+.history-section {
+  margin-top: 36rpx;
+}
+
+.history-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20rpx;
+}
+
+.exercise-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+}
+
+.exercise-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 28rpx;
+  margin-bottom: 0;
+}
+
+.exercise-item-left {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  min-width: 0;
+}
+
+.exercise-squircle {
+  width: 76rpx;
+  height: 76rpx;
+  border-radius: 24rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.squircle-blue {
+  background: #eff6ff;
+  border: 1rpx solid rgba(37, 99, 235, 0.15);
+}
+
+.squircle-amber {
+  background: #fef3c7;
+  border: 1rpx solid rgba(217, 119, 6, 0.15);
+}
+
+.exercise-emoji {
+  font-size: 34rpx;
+}
+
+.exercise-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.exercise-name-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.exercise-kind-name {
+  font-size: 28rpx;
+  font-weight: 750;
+  color: #0f172a;
+}
+
+.exercise-time-tag {
+  font-size: 18rpx;
+  padding: 2rpx 12rpx;
+}
+
+.exercise-note-text {
+  font-size: 22rpx;
+  color: #64748b;
+  margin-top: 6rpx;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 380rpx;
+}
+
+.exercise-item-right {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.exercise-dur-num {
+  font-size: 40rpx;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.exercise-dur-unit {
+  font-size: 20rpx;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-left: 4rpx;
+}

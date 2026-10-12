@@ -8,5 +8,6 @@ backend/data/
 *.db
 *.csv
 *.json.bak
+dist/
 miniprogram/project.private.config.json
 project.private.config.json

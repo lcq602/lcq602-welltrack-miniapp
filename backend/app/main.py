@@ -253,13 +253,35 @@ def mihealth_status(uid):
             "SELECT COUNT(*) AS n FROM mihealth_imports WHERE user_id=?", (uid,)
         ).fetchone()["n"]
         rows = conn.execute(
-            "SELECT metric,recorded_at,value,unit FROM mihealth_imports WHERE user_id=? AND metric<>'steps' "
+            "SELECT metric,recorded_at,value,unit FROM mihealth_imports WHERE user_id=? AND metric<>'steps' AND metric<>'calories' "
             "ORDER BY recorded_at DESC LIMIT 200", (uid,)
         ).fetchall()
         step_total = conn.execute(
             "SELECT substr(recorded_at,1,10) AS day,SUM(value) AS value FROM mihealth_imports "
             "WHERE user_id=? AND metric='steps' GROUP BY substr(recorded_at,1,10) "
             "ORDER BY day DESC LIMIT 1", (uid,)
+        ).fetchone()
+        cal_total = conn.execute(
+            "SELECT substr(recorded_at,1,10) AS day,SUM(value) AS value FROM mihealth_imports "
+            "WHERE user_id=? AND metric='calories' GROUP BY substr(recorded_at,1,10) "
+            "ORDER BY day DESC LIMIT 1", (uid,)
+        ).fetchone()
+        today_str = str(date.today())
+        today_steps_row = conn.execute(
+            "SELECT SUM(value) AS s FROM mihealth_imports WHERE user_id=? AND metric='steps' AND substr(recorded_at,1,10)=?",
+            (uid, today_str),
+        ).fetchone()
+        today_cal_row = conn.execute(
+            "SELECT SUM(value) AS s FROM mihealth_imports WHERE user_id=? AND metric='calories' AND substr(recorded_at,1,10)=?",
+            (uid, today_str),
+        ).fetchone()
+        today_sleep_row = conn.execute(
+            "SELECT MAX(value) AS s FROM mihealth_imports WHERE user_id=? AND metric='sleep_hours' AND substr(recorded_at,1,10)=?",
+            (uid, today_str),
+        ).fetchone()
+        today_workout_row = conn.execute(
+            "SELECT SUM(value) AS s FROM mihealth_imports WHERE user_id=? AND metric='workout_minutes' AND substr(recorded_at,1,10)=?",
+            (uid, today_str),
         ).fetchone()
         pending = conn.execute(
             "SELECT challenge_id,encrypted_state,expires_at,attempts FROM mihealth_challenges "
@@ -269,6 +291,7 @@ def mihealth_status(uid):
         "weight": {"recorded_at": None, "value": None, "unit": "kg"},
         "sleep_hours": {"recorded_at": None, "value": None, "unit": "h"},
         "steps": {"recorded_at": None, "value": None, "unit": "steps"},
+        "calories": {"recorded_at": None, "value": None, "unit": "kcal"},
         "workout_minutes": {"recorded_at": None, "value": None, "unit": "min"},
     }
     for row in rows:
@@ -276,6 +299,18 @@ def mihealth_status(uid):
             latest[row["metric"]] = {"recorded_at": row["recorded_at"], "value": row["value"], "unit": row["unit"]}
     if step_total and step_total["value"] is not None:
         latest["steps"] = {"recorded_at": step_total["day"], "value": int(step_total["value"]), "unit": "steps"}
+    if cal_total and cal_total["value"] is not None:
+        latest["calories"] = {"recorded_at": cal_total["day"], "value": round(float(cal_total["value"]), 1), "unit": "kcal"}
+    today_steps = int(today_steps_row["s"]) if (today_steps_row and today_steps_row["s"] is not None) else (int(latest["steps"]["value"]) if latest["steps"]["value"] is not None else 0)
+    today_calories = round(float(today_cal_row["s"]), 1) if (today_cal_row and today_cal_row["s"] is not None) else (round(float(latest["calories"]["value"]), 1) if latest["calories"]["value"] is not None else 0.0)
+    today_sleep = round(float(today_sleep_row["s"]), 1) if (today_sleep_row and today_sleep_row["s"] is not None) else (round(float(latest["sleep_hours"]["value"]), 1) if latest["sleep_hours"]["value"] is not None else None)
+    today_workout = round(float(today_workout_row["s"]), 1) if (today_workout_row and today_workout_row["s"] is not None) else (round(float(latest["workout_minutes"]["value"]), 1) if latest["workout_minutes"]["value"] is not None else 0.0)
+    today_summary = {
+        "steps": today_steps,
+        "calories": today_calories,
+        "sleep_hours": today_sleep,
+        "workout_minutes": today_workout,
+    }
     challenge = None
     if pending and pending["expires_at"] > int(datetime.now().timestamp()) and key_ready:
         try:
@@ -294,6 +329,7 @@ def mihealth_status(uid):
         "last_synced_at": connection["last_synced_at"] if connection else None,
         "import_count": count,
         "latest": latest,
+        "today": today_summary,
         "challenge": challenge,
     }
 
@@ -531,7 +567,7 @@ def save_profile(payload: ProfileIn, uid: str = Depends(user_id)):
 
 @app.get("/api/v1/dashboard")
 def dashboard(uid: str = Depends(user_id)):
-    """汇总首页最近七天趋势与目标进度。"""
+    """汇总首页最近七天趋势与目标进度，包含小米健康今日活力数据。"""
     p = get_profile(uid)
     today = date.today()
     start = today - timedelta(days=6)
@@ -563,18 +599,122 @@ def dashboard(uid: str = Depends(user_id)):
         "maintenance": ["记录体重范围", "完成日常活动", "保持睡眠习惯"],
         "healthy_habits": ["安排运动", "记录饮食", "记录饮水与睡眠", "减少久坐"],
     }
-    return {"profile": p, "today": str(today), "current_weight": latest_weight, "current_weight_source": weight_source, "target_weight": p["target_weight"] if p else None,
-            "progress": progress, "bmi": bmi, "bmi_label": "仅供参考，不用于诊断", "records": records,
-            "exercise_count_7d": exercise_count, "record_days_7d": len(manual_records), "weekly_completion": min(100, round(len(manual_records) / 7 * 100)),
-            "todos": todos[goal], "configured": bool(p and p["configured"])}
+    mi = mihealth_status(uid)
+    return {
+        "profile": p, "today": str(today), "current_weight": latest_weight, "current_weight_source": weight_source, "target_weight": p["target_weight"] if p else None,
+        "progress": progress, "bmi": bmi, "bmi_label": "仅供参考，不用于诊断", "records": records,
+        "exercise_count_7d": exercise_count, "record_days_7d": len(manual_records), "weekly_completion": min(100, round(len(manual_records) / 7 * 100)),
+        "todos": todos[goal], "configured": bool(p and p["configured"]),
+        "mihealth": {
+            "connected": mi["connected"],
+            "last_synced_at": mi["last_synced_at"],
+            "today": mi["today"],
+            "latest": mi["latest"],
+        },
+    }
 
 @app.get("/api/v1/records")
 def list_records(start: date | None = None, end: date | None = None, limit: int = Query(100, ge=1, le=366), offset: int = Query(0, ge=0), uid: str = Depends(user_id)):
-    """按日期范围分页读取当前用户记录。"""
+    """按日期范围分页读取当前用户记录，包含并合并小米手环体重与活力指标。"""
     start, end = start or date.today() - timedelta(days=365), end or date.today()
+    start_str, end_str = str(start), str(end)
     with read_connection() as conn:
-        rows = conn.execute("SELECT * FROM daily_records WHERE user_id=? AND record_date BETWEEN ? AND ? ORDER BY record_date DESC LIMIT ? OFFSET ?", (uid, str(start), str(end), limit, offset)).fetchall()
-    return [record_out(r) for r in rows]
+        manual_rows = conn.execute(
+            "SELECT * FROM daily_records WHERE user_id=? AND record_date BETWEEN ? AND ? ORDER BY record_date DESC",
+            (uid, start_str, end_str),
+        ).fetchall()
+        mi_rows = conn.execute(
+            "SELECT substr(recorded_at,1,10) AS day, metric, recorded_at, value, unit, payload "
+            "FROM mihealth_imports "
+            "WHERE user_id=? AND recorded_at>=? AND recorded_at<? "
+            "ORDER BY recorded_at ASC",
+            (uid, f"{start_str}T00:00:00", f"{end + timedelta(days=1)}T00:00:00"),
+        ).fetchall()
+
+    mi_by_day = {}
+    for r in mi_rows:
+        day = r["day"]
+        if day not in mi_by_day:
+            mi_by_day[day] = {
+                "weight": None,
+                "sleep_hours": None,
+                "steps": 0,
+                "calories": 0.0,
+                "workout_minutes": 0.0,
+                "has_data": False,
+            }
+        metric = r["metric"]
+        val = r["value"]
+        if metric == "weight" and val is not None:
+            mi_by_day[day]["weight"] = val
+            mi_by_day[day]["has_data"] = True
+        elif metric == "sleep_hours" and val is not None:
+            mi_by_day[day]["sleep_hours"] = val
+            mi_by_day[day]["has_data"] = True
+        elif metric == "steps" and val is not None:
+            mi_by_day[day]["steps"] += int(val)
+            mi_by_day[day]["has_data"] = True
+        elif metric == "calories" and val is not None:
+            mi_by_day[day]["calories"] += round(float(val), 1)
+            mi_by_day[day]["has_data"] = True
+        elif metric == "workout_minutes" and val is not None:
+            mi_by_day[day]["workout_minutes"] += round(float(val), 1)
+            mi_by_day[day]["has_data"] = True
+
+    by_day = {}
+    for r in manual_rows:
+        rec = record_out(r)
+        day = rec["record_date"]
+        mi = mi_by_day.get(day)
+        rec["mihealth_weight"] = mi["weight"] if mi else None
+        rec["mihealth_sleep_hours"] = mi["sleep_hours"] if mi else None
+        rec["steps"] = mi["steps"] if mi and mi["steps"] > 0 else None
+        rec["calories"] = round(mi["calories"], 1) if mi and mi["calories"] > 0 else None
+        rec["workout_minutes"] = round(mi["workout_minutes"], 1) if mi and mi["workout_minutes"] > 0 else None
+        rec["is_mihealth_only"] = False
+
+        if rec.get("weight") is not None:
+            rec["weight_source"] = "manual"
+        elif mi and mi["weight"] is not None:
+            rec["weight"] = mi["weight"]
+            rec["weight_source"] = "mihealth"
+        else:
+            rec["weight_source"] = None
+
+        if rec.get("sleep_hours") is not None:
+            rec["sleep_source"] = "manual"
+        elif mi and mi["sleep_hours"] is not None:
+            rec["sleep_hours"] = mi["sleep_hours"]
+            rec["sleep_source"] = "mihealth"
+        else:
+            rec["sleep_source"] = None
+
+        by_day[day] = rec
+
+    for day, mi in mi_by_day.items():
+        if day not in by_day and mi["has_data"]:
+            by_day[day] = {
+                "id": None,
+                "record_date": day,
+                "weight": mi["weight"],
+                "weight_source": "mihealth" if mi["weight"] is not None else None,
+                "mihealth_weight": mi["weight"],
+                "waist_cm": None,
+                "diet": "",
+                "water_ml": None,
+                "sleep_hours": mi["sleep_hours"],
+                "sleep_source": "mihealth" if mi["sleep_hours"] is not None else None,
+                "mihealth_sleep_hours": mi["sleep_hours"],
+                "habits": [],
+                "note": "",
+                "steps": mi["steps"] if mi["steps"] > 0 else None,
+                "calories": round(mi["calories"], 1) if mi["calories"] > 0 else None,
+                "workout_minutes": round(mi["workout_minutes"], 1) if mi["workout_minutes"] > 0 else None,
+                "is_mihealth_only": True,
+            }
+
+    all_records = sorted(by_day.values(), key=lambda x: x["record_date"], reverse=True)
+    return all_records[offset:offset + limit]
 
 @app.post("/api/v1/records", status_code=201)
 def create_record(payload: RecordIn, uid: str = Depends(user_id)):
@@ -608,7 +748,7 @@ def create_exercise(payload: ExerciseIn, uid: str = Depends(user_id)):
 
 @app.get("/api/v1/analytics")
 def analytics(period: str = Query("week", pattern="^(week|month|calendar)$"), month: str | None = Query(default=None, min_length=7, max_length=7, pattern="^\\d{4}-(0[1-9]|1[0-2])$"), uid: str = Depends(user_id)):
-    """按周或月聚合体重、腰围、运动和睡眠数据。"""
+    """按周或月聚合体重、腰围、运动、步数、卡路里和睡眠数据。"""
     anchor = date.fromisoformat(f"{month}-01") if month else date.today()
     if period == "week":
         start = anchor - timedelta(days=anchor.weekday())
@@ -623,14 +763,59 @@ def analytics(period: str = Query("week", pattern="^(week|month|calendar)$"), mo
             "WHERE user_id=? AND metric='weight' AND recorded_at>=? AND recorded_at<? ORDER BY recorded_at",
             (uid, f"{start}T00:00:00", f"{end + timedelta(days=1)}T00:00:00"),
         ).fetchall()
+        mi_metrics = conn.execute(
+            "SELECT substr(recorded_at,1,10) AS day, metric, SUM(value) AS total_val, MAX(value) AS max_val "
+            "FROM mihealth_imports "
+            "WHERE user_id=? AND metric IN ('steps', 'calories', 'sleep_hours', 'workout_minutes') "
+            "AND recorded_at>=? AND recorded_at<? "
+            "GROUP BY substr(recorded_at,1,10), metric",
+            (uid, f"{start}T00:00:00", f"{end + timedelta(days=1)}T00:00:00"),
+        ).fetchall()
         ex = conn.execute("SELECT COUNT(*) n,SUM(duration_minutes) minutes FROM exercises WHERE user_id=? AND exercise_date BETWEEN ? AND ?", (uid, str(start), str(end))).fetchone()
+
     values = [dict(r) for r in rows]
     values = _merge_mihealth_weights(values, imported_weights)
-    sleeps = [r["sleep_hours"] for r in values if r["sleep_hours"] is not None]
-    return {"period": period, "start": str(start), "end": str(end), "days": [{**r, "habits": _habits_list(r["habits"])} for r in values],
-            "exercise_count": ex["n"] or 0, "exercise_minutes": ex["minutes"] or 0,
-            "average_sleep": round(sum(sleeps) / len(sleeps), 1) if sleeps else None,
-            "habit_completion": round(sum(bool(_habits_list(r["habits"])) for r in values) / max(1, (end-start).days+1) * 100)}
+    by_day_metric = {}
+    for r in mi_metrics:
+        day = r["day"]
+        if day not in by_day_metric:
+            by_day_metric[day] = {}
+        by_day_metric[day][r["metric"]] = (r["total_val"], r["max_val"])
+
+    existing_days = {r["record_date"]: r for r in values}
+    for day, metrics in by_day_metric.items():
+        if day not in existing_days:
+            item = {"record_date": day, "weight": None, "waist_cm": None, "sleep_hours": None, "habits": []}
+            existing_days[day] = item
+            values.append(item)
+    values.sort(key=lambda r: r["record_date"])
+
+    for r in values:
+        day = r["record_date"]
+        mets = by_day_metric.get(day, {})
+        r["steps"] = int(mets["steps"][0]) if "steps" in mets and mets["steps"][0] is not None else 0
+        r["calories"] = round(float(mets["calories"][0]), 1) if "calories" in mets and mets["calories"][0] is not None else 0.0
+        if r.get("sleep_hours") is None and "sleep_hours" in mets:
+            r["sleep_hours"] = round(float(mets["sleep_hours"][1]), 1)
+        r["workout_minutes"] = round(float(mets["workout_minutes"][0]), 1) if "workout_minutes" in mets and mets["workout_minutes"][0] is not None else 0.0
+
+    sleeps = [r["sleep_hours"] for r in values if r.get("sleep_hours") is not None]
+    steps_list = [r["steps"] for r in values if r.get("steps")]
+    cals_list = [r["calories"] for r in values if r.get("calories")]
+    total_steps = sum(steps_list)
+    total_calories = round(sum(cals_list), 1)
+
+    return {
+        "period": period, "start": str(start), "end": str(end),
+        "days": [{**r, "habits": _habits_list(r["habits"])} for r in values],
+        "exercise_count": ex["n"] or 0, "exercise_minutes": ex["minutes"] or 0,
+        "average_sleep": round(sum(sleeps) / len(sleeps), 1) if sleeps else None,
+        "habit_completion": round(sum(bool(_habits_list(r["habits"])) for r in values) / max(1, (end-start).days+1) * 100),
+        "total_steps": total_steps,
+        "average_steps": int(total_steps / len(steps_list)) if steps_list else 0,
+        "total_calories": total_calories,
+        "average_calories": round(total_calories / len(cals_list), 1) if cals_list else 0.0,
+    }
 
 @app.get("/api/v1/export.csv")
 def export_csv(uid: str = Depends(user_id)):
@@ -644,25 +829,27 @@ def export_csv(uid: str = Depends(user_id)):
         ).fetchall()
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["记录类型", "日期", "体重kg", "腰围cm", "饮食", "饮水ml", "睡眠小时", "习惯", "运动类型", "运动分钟", "备注"])
+    writer.writerow(["记录类型", "日期", "体重kg", "腰围cm", "饮食", "饮水ml", "睡眠小时", "习惯", "运动类型", "运动分钟", "卡路里kcal", "步数", "备注"])
     def safe(value):
         """为可能被表格软件执行的 CSV 文本添加安全前缀。"""
         text = "" if value is None else str(value)
         return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
     for r in rows:
-        writer.writerow(["日常", safe(r["record_date"]), safe(r["weight"]), safe(r["waist_cm"]), safe(r["diet"]), safe(r["water_ml"]), safe(r["sleep_hours"]), safe(r["habits"]), "", "", safe(r["note"])])
+        writer.writerow(["日常", safe(r["record_date"]), safe(r["weight"]), safe(r["waist_cm"]), safe(r["diet"]), safe(r["water_ml"]), safe(r["sleep_hours"]), safe(r["habits"]), "", "", "", "", safe(r["note"])])
     for r in exercises:
-        writer.writerow(["运动", safe(r["exercise_date"]), "", "", "", "", "", "", safe(r["kind"]), safe(r["duration_minutes"]), safe(r["note"])])
+        writer.writerow(["运动", safe(r["exercise_date"]), "", "", "", "", "", "", safe(r["kind"]), safe(r["duration_minutes"]), "", "", safe(r["note"])])
     for row in mihealth:
         payload = json.loads(row["payload"] or "{}")
         day = row["recorded_at"][:10]
         metric = row["metric"]
         weight = row["value"] if metric == "weight" else ""
         sleep = row["value"] if metric == "sleep_hours" else ""
+        calories = row["value"] if metric == "calories" else ""
+        steps = row["value"] if metric == "steps" else ""
         kind = payload.get("kind", metric)
         minutes = row["value"] if metric == "workout_minutes" else ""
-        note = f"{row['value']} {row['unit']}" if metric in ("steps",) else "小米运动健康只读同步"
-        writer.writerow(["小米同步", safe(day), safe(weight), "", "", "", safe(sleep), "", safe(kind), safe(minutes), safe(note)])
+        note = f"{row['value']} {row['unit']}" if metric in ("steps", "calories") else "小米运动健康只读同步"
+        writer.writerow(["小米同步", safe(day), safe(weight), "", "", "", safe(sleep), "", safe(kind), safe(minutes), safe(calories), safe(steps), safe(note)])
     return Response(output.getvalue(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=welltrack-records.csv"})
 
 @app.get("/api/v1/backup")

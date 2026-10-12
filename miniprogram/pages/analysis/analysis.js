@@ -19,7 +19,7 @@ function buildChart(days, field, start, end, digits) {
   const padding = max === min ? Math.max(1, max * 0.03) : (max - min) * 0.15
   min -= padding
   max += padding
-  const points = values.map((item, index) => ({
+  const points = values.map((item) => ({
     key: item.date,
     date: item.date,
     label: item.date.slice(5),
@@ -45,10 +45,36 @@ function buildChart(days, field, start, end, digits) {
 }
 
 Page({
-  data: { period: 'week', summary: null, loadError: '', trendRows: [], charts: [], calendarCells: [], calendarLabel: '', calendarMonth: todayString().slice(0, 7), weekLabels: ['一', '二', '三', '四', '五', '六', '日'], loading: true },
+  data: {
+    period: 'week',
+    chartTab: 'weight', // 'weight' | 'steps' | 'calories' | 'vitality'
+    summary: null,
+    loadError: '',
+    trendRows: [],
+    charts: [],
+    stepBars: [],
+    calBars: [],
+    vitalityRows: [],
+    calendarCells: [],
+    calendarLabel: '',
+    calendarMonth: todayString().slice(0, 7),
+    weekLabels: ['一', '二', '三', '四', '五', '六', '日'],
+    loading: true
+  },
+
   // 页面显示时更新统计数据。
-  onShow() { const tab = this.getTabBar && this.getTabBar(); if (tab) tab.setData({ selected: 3 }); this.load() },
-  // 读取所选周期，并生成可视化数据。
+  onShow() {
+    const tab = this.getTabBar && this.getTabBar()
+    if (tab) tab.setData({ selected: 3 })
+    this.load()
+  },
+
+  // 切换图表维度 Tab
+  onChartTab(event) {
+    this.setData({ chartTab: event.currentTarget.dataset.tab })
+  },
+
+  // 读取所选周期，并生成多维度可视化图表数据。
   async load() {
     this.setData({ loading: !this.data.summary, loadError: '' })
     try {
@@ -59,6 +85,7 @@ Page({
       const weights = summary.days.map(day => day.weight).filter(value => value !== null && value !== undefined)
       const min = weights.length ? Math.min(...weights) : 0
       const range = weights.length ? Math.max(...weights) - min : 0
+      
       const trendRows = summary.days.map(day => ({
         ...day,
         short_date: day.record_date.slice(5),
@@ -66,7 +93,47 @@ Page({
         weight_label: day.weight == null ? '—' : `${day.weight} kg`,
         waist_label: day.waist_cm == null ? '腰围 —' : `腰围 ${day.waist_cm} cm`
       }))
-      const charts = this.data.period === 'calendar' ? [] : [buildChart(summary.days, 'weight', summary.start, summary.end, 1), buildChart(summary.days, 'waist_cm', summary.start, summary.end, 1)].filter(Boolean)
+
+      // 步数柱状图数据计算
+      const maxSteps = Math.max(10000, ...(summary.days.map(d => d.steps || 0)))
+      const stepBars = summary.days.map(day => {
+        const steps = day.steps || 0
+        return {
+          record_date: day.record_date,
+          short_date: day.record_date.slice(5),
+          steps,
+          is_achieved: steps >= 6000,
+          bar_height: Math.max(16, Math.min(180, Math.round((steps / maxSteps) * 180)))
+        }
+      })
+
+      // 能量消耗柱状图数据计算
+      const maxCals = Math.max(500, ...(summary.days.map(d => d.calories || 0)))
+      const calBars = summary.days.map(day => {
+        const calories = day.calories || 0
+        return {
+          record_date: day.record_date,
+          short_date: day.record_date.slice(5),
+          calories,
+          bar_height: Math.max(16, Math.min(180, Math.round((calories / maxCals) * 180)))
+        }
+      })
+
+      // 睡眠与运动复盘对比数据计算
+      const vitalityRows = summary.days.map(day => ({
+        record_date: day.record_date,
+        short_date: day.record_date.slice(5),
+        sleep_hours: day.sleep_hours != null ? day.sleep_hours : null,
+        sleep_width: day.sleep_hours ? Math.min(100, Math.round((day.sleep_hours / 10) * 100)) : 0,
+        workout_minutes: day.workout_minutes != null ? day.workout_minutes : 0,
+        workout_width: day.workout_minutes ? Math.min(100, Math.round((day.workout_minutes / 60) * 100)) : 0
+      }))
+
+      const charts = this.data.period === 'calendar' ? [] : [
+        buildChart(summary.days, 'weight', summary.start, summary.end, 1),
+        buildChart(summary.days, 'waist_cm', summary.start, summary.end, 1)
+      ].filter(Boolean)
+
       const cells = []
       if (this.data.period === 'calendar') {
         const [year, month] = this.data.calendarMonth.split('-').map(Number)
@@ -82,11 +149,15 @@ Page({
           cells.push({ key: date, day, hasRecord, isToday, recordedClass: hasRecord && !isToday })
         }
       }
+
       this.setData({
         summary,
         sleepLabel,
         trendRows,
         charts,
+        stepBars,
+        calBars,
+        vitalityRows,
         calendarCells: cells,
         calendarLabel: `${this.data.calendarMonth.slice(0, 4)} 年 ${Number(this.data.calendarMonth.slice(5))} 月`,
         loading: false
@@ -95,10 +166,13 @@ Page({
       this.setData({ loading: false, loadError: error.message || '统计读取失败' })
     }
   },
+
   // 统计请求失败时允许重新加载。
   retryLoad() { this.load() },
+
   // 切换周、月或日历视图。
   onPeriod(event) { this.setData({ period: event.currentTarget.dataset.period }, () => this.load()) },
+
   // 按月份切换日历，并读取对应月份数据。
   changeMonth(event) {
     const [year, month] = this.data.calendarMonth.split('-').map(Number)

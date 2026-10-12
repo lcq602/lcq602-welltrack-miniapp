@@ -1,25 +1,346 @@
 <view class="page">
-  <view class="eyebrow">SMALL STEPS, CLEARER PICTURE</view><view class="title">数据复盘</view>
-  <view class="period-switch"><view class="period-option {{period === 'week' ? 'period-active' : ''}}" data-period="week" bindtap="onPeriod">本周</view><view class="period-option {{period === 'month' ? 'period-active' : ''}}" data-period="month" bindtap="onPeriod">本月</view><view class="period-option {{period === 'calendar' ? 'period-active' : ''}}" data-period="calendar" bindtap="onPeriod">日历</view></view>
-  <view wx:if="{{summary}}">
-    <view class="report-caption">{{summary.start}}　—　{{summary.end}}</view>
-    <view wx:if="{{loadError}}" class="stale-notice">暂时无法更新，当前显示上次统计。</view>
-    <view class="summary-grid"><view class="summary-tile"><view class="summary-figure">{{summary.exercise_count}}</view><view class="summary-label">运动次数</view><view class="summary-foot">{{summary.exercise_minutes}} 分钟累计</view></view><view class="summary-tile"><view class="summary-figure">{{sleepLabel}}<text class="figure-unit">h</text></view><view class="summary-label">平均睡眠</view><view class="summary-foot">按已记录日期计算</view></view><view class="summary-tile summary-wide"><view><view class="summary-figure">{{summary.habit_completion}}<text class="figure-unit">%</text></view><view class="summary-label">习惯记录覆盖</view></view><view class="habit-meter"><view class="habit-meter-fill" style="width: {{summary.habit_completion}}%;"></view></view></view></view>
-    <view wx:if="{{period === 'calendar'}}" class="card calendar-card"><view class="calendar-head"><view class="section-title">{{calendarLabel}}</view><view class="calendar-nav"><text bindtap="changeMonth" data-step="-1">‹</text><text bindtap="changeMonth" data-step="1">›</text></view></view><view class="calendar-grid"><text wx:for="{{weekLabels}}" wx:key="*this" class="calendar-weekday">{{item}}</text><view wx:for="{{calendarCells}}" wx:key="key" class="calendar-cell {{item.isToday ? 'calendar-today' : ''}} {{item.recordedClass ? 'calendar-recorded' : ''}} {{item.empty ? 'calendar-empty' : ''}}"><text>{{item.day}}</text><view wx:if="{{item.hasRecord}}" class="calendar-dot"></view></view></view><view class="calendar-legend"><view class="legend-dot"></view><text>有记录</text><text class="muted">{{summary.days.length}} 天有记录</text></view></view>
-    <view wx:else class="card trend-report"><view class="trend-report-head"><view><view class="section-title">身体趋势</view><view class="muted">每天单独呈现，避免把缺失数据当成变化</view></view><view class="trend-legend"><view class="legend-weight"></view>体重</view></view>
-      <view wx:for="{{charts}}" wx:key="field" class="line-chart {{item.field === 'waist_cm' ? 'waist-chart' : ''}}">
-        <view class="chart-heading"><view class="chart-name">{{item.field === 'weight' ? '体重' : '腰围'}} <text>{{item.unit}}</text></view><view class="chart-range">{{item.min}} — {{item.max}} {{item.unit}}</view></view>
-        <view class="plot">
-          <view class="gridline gridline-top"></view><view class="gridline gridline-middle"></view><view class="gridline gridline-bottom"></view>
-          <text class="axis-label axis-high">{{item.max}}</text><text class="axis-label axis-low">{{item.min}}</text>
-          <view wx:for="{{item.segments}}" wx:for-item="segment" wx:key="key" class="chart-segment" style="left: {{segment.x}}rpx; top: {{segment.y}}rpx; width: {{segment.length}}rpx; transform: rotate({{segment.angle}}deg);"></view>
-          <view wx:for="{{item.points}}" wx:for-item="point" wx:key="key" class="chart-point" style="left: {{point.x}}rpx; top: {{point.y}}rpx;"><view class="point-tooltip">{{point.text}}</view></view>
-        </view>
-        <view class="date-axis"><text wx:for="{{item.labels}}" wx:key="key" style="left: {{item.x}}rpx;">{{item.text}}</text></view>
+  <!-- 1. 顶部 Header -->
+  <view class="page-head">
+    <view>
+      <view class="brand-eyebrow">
+        <view class="pulse-dot"></view>
+        <text>SMALL STEPS, CLEARER PICTURE</text>
       </view>
-      <view wx:if="{{summary.days.length}}" class="trend-list"><view wx:for="{{trendRows}}" wx:key="record_date" class="trend-row"><view class="trend-date">{{item.short_date}}</view><view class="trend-track"><view class="trend-weight-bar" style="width: {{item.weight_width}}%;"></view></view><view class="trend-value">{{item.weight_label}}</view><view class="waist-value">{{item.waist_label}}</view></view></view>
-      <view wx:else class="empty">本周期还没有身体数据。开始记录后，这里会展示变化。</view>
+      <view class="page-title">数据复盘</view>
     </view>
-    <view class="health-note">这里只汇总你录入的数据，不用于疾病诊断。</view>
-  </view><view wx:elif="{{loadError}}" class="error-state"><view class="section-title">暂时无法读取统计</view><view class="muted">{{loadError}}</view><button class="button" bindtap="retryLoad">重新加载</button></view><view wx:else class="loading-state"><view class="loading-orbit"><view class="loading-spark"></view></view><view class="loading-copy">正在整理你的变化</view><view class="loading-caption">WELLTRACK · 正在同步</view></view>
+    <view class="pill pill-emerald" wx:if="{{summary}}">
+      <text>趋势洞察</text>
+    </view>
+  </view>
+
+  <!-- 周期切换分段器 -->
+  <view class="period-switch-bar">
+    <view class="period-pill {{period === 'week' ? 'period-pill-active' : ''}}" data-period="week" bindtap="onPeriod">
+      本周
+    </view>
+    <view class="period-pill {{period === 'month' ? 'period-pill-active' : ''}}" data-period="month" bindtap="onPeriod">
+      本月
+    </view>
+    <view class="period-pill {{period === 'calendar' ? 'period-pill-active' : ''}}" data-period="calendar" bindtap="onPeriod">
+      日历
+    </view>
+  </view>
+
+  <!-- 核心数据区域 -->
+  <view wx:if="{{summary}}">
+    <!-- 日期范围指示 -->
+    <view class="report-range-row">
+      <view class="report-range-pill">
+        <text class="range-calendar-icon">📅</text>
+        <text>{{summary.start}} — {{summary.end}}</text>
+      </view>
+      <view wx:if="{{loadError}}" class="pill pill-amber">显示上次缓存</view>
+    </view>
+
+    <!-- 摘要 Bento 网格 (4 项全面指标) -->
+    <view class="summary-bento-grid">
+      <!-- Bento 1: 累计步数 -->
+      <view class="summary-tile card tile-emerald-glow">
+        <view class="summary-tile-head">
+          <text class="summary-tile-label">累计步数</text>
+          <view class="summary-icon-squircle icon-emerald">👟</view>
+        </view>
+        <view class="summary-tile-val">
+          {{summary.total_steps || 0}} <text class="val-unit">步</text>
+        </view>
+        <view class="summary-tile-foot">日均 {{summary.average_steps || 0}} 步</view>
+      </view>
+
+      <!-- Bento 2: 消耗能量 -->
+      <view class="summary-tile card tile-amber-glow">
+        <view class="summary-tile-head">
+          <text class="summary-tile-label">消耗能量</text>
+          <view class="summary-icon-squircle icon-amber">🔥</view>
+        </view>
+        <view class="summary-tile-val">
+          {{summary.total_calories || 0}} <text class="val-unit">kcal</text>
+        </view>
+        <view class="summary-tile-foot">日均 {{summary.average_calories || 0}} kcal</view>
+      </view>
+
+      <!-- Bento 3: 平均睡眠 -->
+      <view class="summary-tile card tile-purple-glow">
+        <view class="summary-tile-head">
+          <text class="summary-tile-label">平均睡眠</text>
+          <view class="summary-icon-squircle icon-purple">🌙</view>
+        </view>
+        <view class="summary-tile-val">
+          {{sleepLabel}} <text class="val-unit">h</text>
+        </view>
+        <view class="summary-tile-foot">作息规律与身心恢复</view>
+      </view>
+
+      <!-- Bento 4: 运动累计 -->
+      <view class="summary-tile card tile-blue-glow">
+        <view class="summary-tile-head">
+          <text class="summary-tile-label">运动累计</text>
+          <view class="summary-icon-squircle icon-blue">🏃</view>
+        </view>
+        <view class="summary-tile-val">
+          {{summary.exercise_count || 0}} <text class="val-unit">次</text>
+        </view>
+        <view class="summary-tile-foot">{{summary.exercise_minutes || 0}} 分钟累计</view>
+      </view>
+    </view>
+
+    <!-- 日历视图 -->
+    <view wx:if="{{period === 'calendar'}}" class="card calendar-card">
+      <view class="calendar-header">
+        <view class="card-title">{{calendarLabel}}</view>
+        <view class="calendar-nav-group">
+          <view class="calendar-nav-btn" bindtap="changeMonth" data-step="-1">‹</view>
+          <view class="calendar-nav-btn" bindtap="changeMonth" data-step="1">›</view>
+        </view>
+      </view>
+
+      <view class="calendar-week-row">
+        <text wx:for="{{weekLabels}}" wx:key="*this" class="calendar-weekday">{{item}}</text>
+      </view>
+
+      <view class="calendar-grid">
+        <view 
+          wx:for="{{calendarCells}}" 
+          wx:key="key" 
+          class="calendar-cell {{item.isToday ? 'cell-today' : ''}} {{item.recordedClass ? 'cell-recorded' : ''}} {{item.empty ? 'cell-empty' : ''}}"
+        >
+          <text class="cell-num">{{item.day}}</text>
+          <view wx:if="{{item.hasRecord && !item.isToday}}" class="cell-record-dot"></view>
+        </view>
+      </view>
+
+      <view class="calendar-legend-row">
+        <view class="legend-item">
+          <view class="legend-dot dot-emerald"></view>
+          <text>有记录</text>
+        </view>
+        <view class="legend-item">
+          <view class="legend-dot dot-today"></view>
+          <text>今日</text>
+        </view>
+        <text class="legend-summary">共 {{summary.days.length}} 天记录</text>
+      </view>
+    </view>
+
+    <!-- 趋势图表卡片 (周 / 月) -->
+    <view wx:else class="card trend-card">
+      <!-- 图表维度切换 Tab -->
+      <view class="chart-tab-bar">
+        <view class="chart-tab-item {{chartTab === 'weight' ? 'tab-active' : ''}}" data-tab="weight" bindtap="onChartTab">
+          ⚖️ 体重走势
+        </view>
+        <view class="chart-tab-item {{chartTab === 'steps' ? 'tab-active' : ''}}" data-tab="steps" bindtap="onChartTab">
+          👟 步数波动
+        </view>
+        <view class="chart-tab-item {{chartTab === 'calories' ? 'tab-active' : ''}}" data-tab="calories" bindtap="onChartTab">
+          🔥 能量消耗
+        </view>
+        <view class="chart-tab-item {{chartTab === 'vitality' ? 'tab-active' : ''}}" data-tab="vitality" bindtap="onChartTab">
+          🌙 睡眠运动
+        </view>
+      </view>
+
+      <!-- 维度 1: 体重与腰围走势 (折线图) -->
+      <block wx:if="{{chartTab === 'weight'}}">
+        <view class="trend-card-header">
+          <view>
+            <view class="card-title">身体基线走势</view>
+            <view class="card-subtitle">每天单独呈现，观察整体平稳曲线</view>
+          </view>
+          <view class="trend-legends">
+            <view class="legend-chip">
+              <view class="legend-dot dot-emerald"></view>
+              <text>体重</text>
+            </view>
+            <view class="legend-chip">
+              <view class="legend-dot dot-purple"></view>
+              <text>腰围</text>
+            </view>
+          </view>
+        </view>
+
+        <!-- 动态折线图表 -->
+        <view wx:for="{{charts}}" wx:key="field" class="line-chart-box {{item.field === 'waist_cm' ? 'chart-waist' : 'chart-weight'}}">
+          <view class="chart-top-bar">
+            <view class="chart-title">
+              {{item.field === 'weight' ? '体重走势' : '腰围走势'}}
+              <text class="chart-unit">({{item.unit}})</text>
+            </view>
+            <view class="chart-range-badge">{{item.min}} ~ {{item.max}} {{item.unit}}</view>
+          </view>
+
+          <view class="plot-canvas">
+            <view class="plot-gridline gridline-top"></view>
+            <view class="plot-gridline gridline-mid"></view>
+            <view class="plot-gridline gridline-bot"></view>
+
+            <text class="axis-lbl lbl-top">{{item.max}}</text>
+            <text class="axis-lbl lbl-bot">{{item.min}}</text>
+
+            <!-- 折线段 -->
+            <view 
+              wx:for="{{item.segments}}" 
+              wx:for-item="segment" 
+              wx:key="key" 
+              class="chart-segment" 
+              style="left: {{segment.x}}rpx; top: {{segment.y}}rpx; width: {{segment.length}}rpx; transform: rotate({{segment.angle}}deg);"
+            ></view>
+
+            <!-- 数据点 -->
+            <view 
+              wx:for="{{item.points}}" 
+              wx:for-item="point" 
+              wx:key="key" 
+              class="chart-point" 
+              style="left: {{point.x}}rpx; top: {{point.y}}rpx;"
+            ></view>
+          </view>
+
+          <!-- X 轴日期刻度 -->
+          <view class="x-axis-row">
+            <text wx:for="{{item.labels}}" wx:key="key" class="x-label" style="left: {{item.x}}rpx;">
+              {{item.text}}
+            </text>
+          </view>
+        </view>
+
+        <!-- 每日细分条形清单 -->
+        <view wx:if="{{summary.days.length}}" class="trend-detail-list">
+          <view wx:for="{{trendRows}}" wx:key="record_date" class="trend-detail-row">
+            <view class="row-date">{{item.short_date}}</view>
+            <view class="row-bar-track">
+              <view class="row-bar-fill" style="width: {{item.weight_width}}%;"></view>
+            </view>
+            <view class="row-weight-val">{{item.weight_label}}</view>
+            <view class="row-waist-val">{{item.waist_label}}</view>
+          </view>
+        </view>
+      </block>
+
+      <!-- 维度 2: 每日步数波动 (柱状图) -->
+      <block wx:elif="{{chartTab === 'steps'}}">
+        <view class="trend-card-header">
+          <view>
+            <view class="card-title">每日步数走势</view>
+            <view class="card-subtitle">日常步行活动量，基准线为 6,000 步活力线</view>
+          </view>
+          <view class="pill pill-emerald">6,000 步活力达标</view>
+        </view>
+
+        <!-- 步数柱状波动图 -->
+        <view class="bar-chart-container">
+          <view class="bar-target-line"></view>
+          <text class="bar-target-label">6,000 步</text>
+
+          <view class="bar-columns-row">
+            <view wx:for="{{stepBars}}" wx:key="record_date" class="bar-col-item">
+              <text class="bar-val-label {{item.is_achieved ? 'val-achieved' : ''}}">{{item.steps ? item.steps : ''}}</text>
+              <view class="bar-track-wrap">
+                <view 
+                  class="bar-pillar {{item.is_achieved ? 'pillar-emerald' : 'pillar-slate'}}" 
+                  style="height: {{item.bar_height}}rpx;"
+                ></view>
+              </view>
+              <text class="bar-date-label">{{item.short_date}}</text>
+            </view>
+          </view>
+        </view>
+      </block>
+
+      <!-- 维度 3: 能量消耗波动 (柱状图) -->
+      <block wx:elif="{{chartTab === 'calories'}}">
+        <view class="trend-card-header">
+          <view>
+            <view class="card-title">能量消耗走势</view>
+            <view class="card-subtitle">全天动态代谢与运动热量支出 (kcal)</view>
+          </view>
+          <view class="pill pill-amber">总消耗 {{summary.total_calories || 0}} kcal</view>
+        </view>
+
+        <!-- 卡路里柱状波动图 -->
+        <view class="bar-chart-container">
+          <view class="bar-columns-row">
+            <view wx:for="{{calBars}}" wx:key="record_date" class="bar-col-item">
+              <text class="bar-val-label val-amber">{{item.calories ? item.calories : ''}}</text>
+              <view class="bar-track-wrap">
+                <view 
+                  class="bar-pillar pillar-amber" 
+                  style="height: {{item.bar_height}}rpx;"
+                ></view>
+              </view>
+              <text class="bar-date-label">{{item.short_date}}</text>
+            </view>
+          </view>
+        </view>
+      </block>
+
+      <!-- 维度 4: 睡眠与运动复盘对比 -->
+      <block wx:elif="{{chartTab === 'vitality'}}">
+        <view class="trend-card-header">
+          <view>
+            <view class="card-title">作息与运动复盘</view>
+            <view class="card-subtitle">观察睡眠时长与运动安排的节律配合</view>
+          </view>
+          <view class="trend-legends">
+            <view class="legend-chip">
+              <view class="legend-dot dot-purple"></view>
+              <text>睡眠(h)</text>
+            </view>
+            <view class="legend-chip">
+              <view class="legend-dot dot-blue"></view>
+              <text>运动(min)</text>
+            </view>
+          </view>
+        </view>
+
+        <!-- 睡眠与运动对照条形列表 -->
+        <view class="vitality-compare-list">
+          <view wx:for="{{vitalityRows}}" wx:key="record_date" class="vitality-compare-row">
+            <view class="v-comp-date">{{item.short_date}}</view>
+            
+            <view class="v-comp-bars">
+              <!-- 睡眠条 -->
+              <view class="v-comp-bar-item">
+                <view class="v-bar-track">
+                  <view class="v-bar-fill fill-purple" style="width: {{item.sleep_width}}%;"></view>
+                </view>
+                <text class="v-bar-num">{{item.sleep_hours ? item.sleep_hours + 'h' : '—'}}</text>
+              </view>
+
+              <!-- 运动条 -->
+              <view class="v-comp-bar-item">
+                <view class="v-bar-track">
+                  <view class="v-bar-fill fill-blue" style="width: {{item.workout_width}}%;"></view>
+                </view>
+                <text class="v-bar-num">{{item.workout_minutes ? item.workout_minutes + 'm' : '—'}}</text>
+              </view>
+            </view>
+          </view>
+        </view>
+      </block>
+    </view>
+
+    <view class="footnote-note">
+      数据来自手环自动同步与手工日常记录，用于长期生活节律复盘，不构成临床医疗诊断。
+    </view>
+  </view>
+
+  <!-- 错误状态 -->
+  <view wx:elif="{{loadError}}" class="card error-state">
+    <view class="error-mark">!</view>
+    <view class="card-title">暂时无法读取统计</view>
+    <view class="muted">{{loadError}}</view>
+    <button class="btn-primary" style="margin-top: 24rpx; width: 280rpx;" bindtap="retryLoad">重新加载</button>
+  </view>
+
+  <!-- 加载状态 -->
+  <view wx:else class="card loading-state">
+    <view class="loading-spinner"></view>
+    <view class="loading-text">正在整理你的健康变化…</view>
+    <view class="loading-sub">WELLTRACK · 每一步都看得见</view>
+  </view>
 </view>

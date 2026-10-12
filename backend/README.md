@@ -15,6 +15,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --env-file .env
 
 后续可以双击本目录的 `start-backend.bat`。脚本会检查 `uv`，在缺少 `.env` 时从样例创建，执行 `uv sync` 并以 `0.0.0.0:8000` 启动开发服务器。API 文档在 <http://127.0.0.1:8000/docs>，存活检查为 <http://127.0.0.1:8000/health>。后端首次启动会建立 schema 和索引，数据库默认保存在 `backend/data/welltrack.sqlite3`。
 
+Linux 可运行 `chmod +x start-backend.sh && ./start-backend.sh`。首次运行会生成 `.env` 并停止；编辑配置后再次运行。脚本使用 `uv sync --locked --no-dev` 安装生产依赖，并监听 `0.0.0.0:8000`，需另外配置 Linux 防火墙及云服务器安全组。
+
 ## 测试
 
 在 `backend/` 目录执行：

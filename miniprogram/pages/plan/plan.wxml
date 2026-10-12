@@ -1,19 +1,149 @@
 <view class="page">
-  <view class="eyebrow">A PLAN THAT FITS YOU</view><view class="title">计划</view>
-  <view class="plan-intro"><view class="plan-sun">✳</view><view><view class="plan-intro-title">稳定，比赶进度更重要</view><view class="muted">让计划配合你的生活，而不是反过来。</view></view></view>
-  <view wx:if="{{profile}}" class="card">
-    <view class="card-kicker">MY DIRECTION</view><view class="section-title">阶段目标</view>
-    <text class="field-label">管理方向</text><picker range="{{goalOptions}}" value="{{goalIndex}}" bindchange="onGoal"><view class="input picker-field">{{goalLabel}}<text>⌄</text></view></picker>
-    <view class="plan-grid"><view><text class="field-label">当前体重 · kg</text><input class="input" type="digit" value="{{form.current_weight}}" data-key="current_weight" bindinput="onInput" /></view><view><text class="field-label">目标体重 · kg</text><input class="input" type="digit" value="{{form.target_weight}}" data-key="target_weight" bindinput="onInput" /></view></view>
-    <text class="field-label">计划开始</text><picker mode="date" value="{{form.start_date}}" bindchange="onInput" data-key="start_date"><view class="input picker-field">{{form.start_date || '选择开始日期'}}<text>⌄</text></view></picker>
-    <text class="field-label">目标日期 · 选填</text><picker mode="date" value="{{form.target_date}}" bindchange="onInput" data-key="target_date"><view class="input picker-field">{{form.target_date || '暂不设定日期'}}<text>⌄</text></view></picker>
-    <view class="muted">日期是规划参考，可以按身体感受调整，不代表进度承诺。</view>
+  <!-- 1. 顶部 Header -->
+  <view class="page-head">
+    <view>
+      <view class="brand-eyebrow">
+        <view class="pulse-dot"></view>
+        <text>A PLAN THAT FITS YOU</text>
+      </view>
+      <view class="page-title">阶段计划</view>
+    </view>
+    <view class="pill pill-emerald" wx:if="{{profile}}">
+      <text>版本稳定</text>
+    </view>
   </view>
-  <view wx:elif="{{loading}}" class="card initial-fetch"><view class="loading-orbit"><view class="loading-spark"></view></view><view class="loading-copy">正在取回你的计划</view></view>
-  <view wx:else class="card setup-needed"><view class="section-title">先建立你的健康起点</view><view class="muted">完成身高、当前体重和目标设置后，就可以编辑每周安排。</view><navigator class="mini-link" open-type="switchTab" url="/pages/index/index">去首页完成设置 →</navigator></view>
-  <view wx:if="{{profile}}" class="card">
-    <view class="card-kicker">YOUR WEEK</view><view class="section-title">安排一个现实的星期</view><view class="muted section-note">训练、活动和休息都算计划的一部分。</view>
-    <view wx:for="{{days}}" wx:key="key" class="schedule-row"><view class="day-badge">{{item.name}}</view><picker range="{{weekOptions}}" value="{{item.choice}}" data-index="{{index}}" bindchange="onPlanPick"><view class="schedule-choice"><text>{{item.value}}</text><text class="choice-arrow">⌄</text></view></picker></view>
-    <button class="button" loading="{{saving}}" disabled="{{saving}}" bindtap="save">{{saving ? '正在保存…' : '保存为新版本'}}</button><view class="append-note">保存会新增一份计划版本，历史版本保留。</view>
+
+  <!-- 温和心念卡片 -->
+  <view class="plan-quote-card card">
+    <view class="quote-spark">✳</view>
+    <view class="quote-copy">
+      <view class="quote-title">稳定，比赶进度更重要</view>
+      <view class="quote-desc">让计划配合你的生活，而不是反过来。持续的低摩擦行动，胜过短暂的完美主义。</view>
+    </view>
+  </view>
+
+  <!-- 2. 阶段目标设定卡片 -->
+  <view wx:if="{{profile}}" class="card plan-target-card">
+    <view class="card-header">
+      <view>
+        <view class="card-kicker">MY DIRECTION</view>
+        <view class="card-title">阶段目标</view>
+      </view>
+      <view class="pill pill-emerald">进行中</view>
+    </view>
+
+    <!-- 管理方向分段标签组 -->
+    <view class="field-label">管理方向</view>
+    <view class="goal-chips-row">
+      <view 
+        wx:for="{{goalOptions}}" 
+        wx:key="*this" 
+        class="goal-chip {{goalIndex === index ? 'goal-chip-active' : ''}}" 
+        data-index="{{index}}" 
+        bindtap="selectGoal"
+      >
+        <text>{{item}}</text>
+      </view>
+    </view>
+
+    <!-- 双核心数值输入网格 -->
+    <view class="plan-grid-2">
+      <view class="plan-input-tile">
+        <text class="tile-label">当前体重</text>
+        <view class="tile-control">
+          <input class="form-input tile-input" type="digit" value="{{form.current_weight}}" data-key="current_weight" bindinput="onInput" />
+          <text class="tile-unit">kg</text>
+        </view>
+      </view>
+
+      <view class="plan-input-tile">
+        <view class="tile-label-row">
+          <text class="tile-label">目标体重</text>
+          <text wx:if="{{deltaText}}" class="tile-delta">{{deltaText}}</text>
+        </view>
+        <view class="tile-control">
+          <input class="form-input tile-input" type="digit" value="{{form.target_weight}}" data-key="target_weight" bindinput="onInput" />
+          <text class="tile-unit">kg</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 日期规划 -->
+    <view class="plan-dates-row">
+      <view class="date-tile">
+        <text class="field-label">计划开始日期</text>
+        <picker mode="date" value="{{form.start_date}}" bindchange="onInput" data-key="start_date">
+          <view class="picker-field date-picker-box">
+            <text class="picker-value">{{form.start_date || '选择日期'}}</text>
+            <text class="picker-icon">📅</text>
+          </view>
+        </picker>
+      </view>
+
+      <view class="date-tile">
+        <text class="field-label">目标达成日期（选填）</text>
+        <picker mode="date" value="{{form.target_date}}" bindchange="onInput" data-key="target_date">
+          <view class="picker-field date-picker-box">
+            <text class="picker-value">{{form.target_date || '按节奏调整'}}</text>
+            <text class="picker-icon">›</text>
+          </view>
+        </picker>
+      </view>
+    </view>
+
+    <view class="footnote-note align-left">
+      💡 日期是规划参考，可以按身体感受随时调整，不代表死板的进度承诺。
+    </view>
+  </view>
+
+  <!-- 加载状态 -->
+  <view wx:elif="{{loading}}" class="card loading-state">
+    <view class="loading-spinner"></view>
+    <view class="loading-text">正在读取你的专属计划…</view>
+  </view>
+
+  <!-- 提示先在首页设置起点 -->
+  <view wx:else class="card empty-box">
+    <view class="empty-icon">⚙</view>
+    <view class="card-title">先建立你的健康起点</view>
+    <view class="muted" style="margin: 12rpx 0 24rpx;">完成身高、当前体重和目标设置后，就可以编辑每周安排。</view>
+    <navigator class="btn-primary" open-type="switchTab" url="/pages/index/index" style="width: 320rpx;">
+      去首页完成设置 ›
+    </navigator>
+  </view>
+
+  <!-- 3. 周日程排期卡片 -->
+  <view wx:if="{{profile}}" class="card schedule-card">
+    <view class="card-header">
+      <view>
+        <view class="card-kicker">YOUR WEEK</view>
+        <view class="card-title">安排一个现实的星期</view>
+        <view class="card-subtitle">训练、活动和休息都算计划的一部分</view>
+      </view>
+      <view class="pill pill-blue">周节奏</view>
+    </view>
+
+    <!-- 7天列表 -->
+    <view class="schedule-list">
+      <view wx:for="{{days}}" wx:key="key" class="schedule-row">
+        <view class="day-badge">{{item.name}}</view>
+        
+        <picker class="schedule-picker-wrap" range="{{weekOptions}}" value="{{item.choice}}" data-index="{{index}}" bindchange="onPlanPick">
+          <view class="schedule-selector">
+            <view class="selector-content">
+              <text class="selector-value">{{item.value}}</text>
+              <view class="pill pill-slate selector-tag">{{item.tag}}</view>
+            </view>
+            <text class="selector-arrow">⌄</text>
+          </view>
+        </picker>
+      </view>
+    </view>
+
+    <!-- 保存操作 -->
+    <button class="btn-primary save-plan-btn" loading="{{saving}}" disabled="{{saving}}" bindtap="save">
+      {{saving ? '正在保存…' : '保存为新版本'}}
+    </button>
+    <view class="append-note">保存会新增一份计划版本，历史版本保留。</view>
   </view>
 </view>

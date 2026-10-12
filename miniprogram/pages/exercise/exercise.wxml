@@ -1,15 +1,122 @@
 <view class="page">
-  <view class="eyebrow">MOVEMENT, YOUR WAY</view><view class="title">运动</view>
-  <view class="move-hero"><view class="move-orbit">↗</view><view class="move-headline">动一动，<br/>就是进展。</view><view class="move-sub">散步、训练或拉伸，选择适合今天的方式。</view></view>
-  <view class="card">
-    <view class="section-title">记录一次活动</view><view class="muted section-note">按实际完成情况记录，不需要达到固定强度。</view>
-    <text class="field-label">日期</text><picker mode="date" value="{{exercise_date}}" bindchange="onInput" data-key="exercise_date"><view class="input picker-field">{{exercise_date}}<text>⌄</text></view></picker>
-    <text class="field-label">活动类型</text><picker range="{{kindOptions}}" value="{{kindIndex}}" bindchange="onKind"><view class="input picker-field">{{kind}}<text>⌄</text></view></picker>
-    <view class="duration-wrap"><view><view class="field-label">活动时长</view><view class="duration-hint">分钟</view></view><input class="duration-input" type="number" placeholder="30" data-key="duration" bindinput="onInput" /></view>
-    <text class="field-label">备注 · 选填</text><input class="input" placeholder="例如：公园散步，感觉轻松" data-key="note" bindinput="onInput" />
-    <button class="button" loading="{{saving}}" disabled="{{saving}}" bindtap="save">{{saving ? '正在保存…' : '记下这次活动'}}</button>
+  <!-- 1. 顶部 Header -->
+  <view class="page-head">
+    <view>
+      <view class="brand-eyebrow">
+        <view class="pulse-dot"></view>
+        <text>MOVEMENT, YOUR WAY</text>
+      </view>
+      <view class="page-title">运动打卡</view>
+    </view>
+    <view class="pill pill-blue">
+      <text>活力充沛</text>
+    </view>
   </view>
-  <view class="history-head"><view><view class="section-title">活动记录</view><view class="muted">{{items.length}} 次活动</view></view><text class="history-icon">✳</text></view>
-  <view wx:if="{{items.length}}"><view wx:for="{{items}}" wx:key="id" class="exercise-item"><view class="exercise-mark">{{item.kind === '力量训练' ? '力' : '动'}}</view><view class="exercise-info"><view class="exercise-name">{{item.kind}}</view><view class="muted">{{item.note_text}}</view></view><view class="exercise-duration">{{item.duration_minutes}}<text>分</text></view></view></view>
-  <view wx:elif="{{loading && !hasLoaded}}" class="history-card initial-fetch"><view class="loading-orbit"><view class="loading-spark"></view></view><view class="loading-copy">正在整理运动记录</view></view><view wx:else class="empty history-card">记录过的活动会整理在这里。</view>
+
+  <!-- 运动激励卡片 -->
+  <view class="move-quote-card card">
+    <view class="move-spark">⚡</view>
+    <view class="move-quote-copy">
+      <view class="quote-title">动一动，就是进展</view>
+      <view class="quote-desc">散步、力量、拉伸或快走，只要身体动起来，代谢与心肺就在积极响应。</view>
+    </view>
+  </view>
+
+  <!-- 运动录入卡片 -->
+  <view class="card exercise-form-card">
+    <view class="card-header">
+      <view>
+        <view class="card-kicker">NEW ACTIVITY</view>
+        <view class="card-title">记录一次活动</view>
+        <view class="card-subtitle">按实际完成情况记录，不需要达到固定强度</view>
+      </view>
+    </view>
+
+    <!-- 日期选择 -->
+    <text class="field-label">活动日期</text>
+    <picker mode="date" value="{{exercise_date}}" bindchange="onInput" data-key="exercise_date">
+      <view class="picker-field">
+        <text class="picker-val">{{exercise_date}}</text>
+        <text class="picker-icon">📅</text>
+      </view>
+    </picker>
+
+    <!-- 活动类型分段胶囊 -->
+    <text class="field-label">活动类型</text>
+    <view class="kind-chips-row">
+      <view 
+        wx:for="{{kindOptions}}" 
+        wx:key="*this" 
+        class="kind-chip {{kindIndex === index ? 'kind-chip-active' : ''}}" 
+        data-index="{{index}}" 
+        bindtap="selectKind"
+      >
+        <text>{{item}}</text>
+      </view>
+    </view>
+
+    <!-- 活动时长录入卡片 -->
+    <view class="duration-tile">
+      <view class="duration-head">
+        <text class="tile-label">活动时长</text>
+        <text class="duration-hint">分钟 (1 ~ 1440)</text>
+      </view>
+      <view class="duration-control">
+        <input class="form-input duration-input" type="number" value="{{duration}}" placeholder="30" data-key="duration" bindinput="onInput" />
+        <text class="duration-unit">分钟</text>
+      </view>
+    </view>
+
+    <!-- 备注 -->
+    <text class="field-label">备注 · 选填</text>
+    <input class="form-input" value="{{note}}" placeholder="例如：公园慢跑 4 公里，呼吸均匀体感轻松" data-key="note" bindinput="onInput" />
+
+    <!-- 提交按钮 -->
+    <button class="btn-primary save-move-btn" loading="{{saving}}" disabled="{{saving}}" bindtap="save">
+      {{saving ? '正在保存…' : '记下这次活动'}}
+    </button>
+  </view>
+
+  <!-- 历史运动记录列表 -->
+  <view class="history-section">
+    <view class="history-head-row">
+      <view>
+        <view class="card-title">活动历史</view>
+        <view class="card-subtitle">共累计 {{items.length}} 次健康活动</view>
+      </view>
+      <view class="pill pill-blue">运动日志</view>
+    </view>
+
+    <view wx:if="{{items.length}}" class="exercise-list">
+      <view wx:for="{{items}}" wx:key="id" class="exercise-card card">
+        <view class="exercise-item-left">
+          <view class="exercise-squircle {{item.kind === '力量训练' ? 'squircle-amber' : 'squircle-blue'}}">
+            <text class="exercise-emoji">{{item.icon}}</text>
+          </view>
+          <view class="exercise-info">
+            <view class="exercise-name-row">
+              <text class="exercise-kind-name">{{item.kind}}</text>
+              <view class="pill pill-slate exercise-time-tag">{{item.duration_minutes}} 分钟</view>
+            </view>
+            <view class="exercise-note-text">{{item.note_text}}</view>
+          </view>
+        </view>
+        <view class="exercise-item-right">
+          <text class="exercise-dur-num">{{item.duration_minutes}}</text>
+          <text class="exercise-dur-unit">min</text>
+        </view>
+      </view>
+    </view>
+
+    <view wx:elif="{{loading && !hasLoaded}}" class="card loading-state">
+      <view class="loading-spinner"></view>
+      <view class="loading-text">正在整理运动记录…</view>
+    </view>
+
+    <view wx:else class="card empty-box">
+      <view class="empty-icon">🏃</view>
+      <view class="card-title">暂无运动记录</view>
+      <view class="muted" style="margin-top: 8rpx;">完成任意一次快走、拉伸或训练，记下一笔吧！</view>
+    </view>
+  </view>
 </view>

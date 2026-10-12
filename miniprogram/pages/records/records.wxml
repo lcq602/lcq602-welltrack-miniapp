@@ -1,21 +1,247 @@
 <view class="page">
-  <view class="eyebrow">A GENTLE DAILY CHECK-IN</view><view class="title">记录今天</view>
-  <view class="export-actions"><text>个人数据</text><button class="export-button" bindtap="exportCsv">导出 CSV</button><button class="export-button" bindtap="exportBackup">JSON 备份</button></view>
-  <view class="record-date"><view><view class="record-date-label">正在记录</view><view class="record-date-title">{{form.record_date}}</view></view><picker mode="date" value="{{form.record_date}}" bindchange="onInput" data-key="record_date"><view class="date-change">更改日期　⌄</view></picker></view>
-  <view class="card">
-    <view class="form-section"><view class="section-index">01</view><view class="section-title">身体数据</view></view><view class="muted section-note">不必每天都称重，记录你方便观察的项目。</view>
-    <view class="input-grid"><view><text class="field-label">体重 · kg</text><input class="input" type="digit" value="{{form.weight}}" placeholder="—" data-key="weight" bindinput="onInput" /></view><view><text class="field-label">腰围 · cm</text><input class="input" type="digit" value="{{form.waist_cm}}" placeholder="—" data-key="waist_cm" bindinput="onInput" /></view></view>
-    <view class="form-section section-spaced"><view class="section-index">02</view><view class="section-title">日常状态</view></view>
-    <view class="input-grid"><view><text class="field-label">饮水 · ml</text><input class="input" type="number" value="{{form.water_ml}}" placeholder="例如 1600" data-key="water_ml" bindinput="onInput" /></view><view><text class="field-label">睡眠 · 小时</text><input class="input" type="digit" value="{{form.sleep_hours}}" placeholder="例如 7.5" data-key="sleep_hours" bindinput="onInput" /></view></view>
-    <text class="field-label">饮食简记</text><input class="input" value="{{form.diet}}" placeholder="例如：三餐规律，晚餐有蔬菜" data-key="diet" bindinput="onInput" />
-    <view class="form-section section-spaced"><view class="section-index">03</view><view class="section-title">今天做到的小习惯</view></view>
-    <view class="habit-grid"><view wx:for="{{habitItems}}" wx:key="name" class="habit-chip {{item.selected ? 'habit-selected' : ''}}" data-item="{{item.name}}" bindtap="onHabit"><view class="habit-check">{{item.selected ? '✓' : '+'}}</view><text>{{item.name}}</text></view></view>
-    <text class="field-label">补充备注 · 选填</text><textarea class="input note-input" value="{{form.note}}" placeholder="写下今天值得记住的一件事…" data-key="note" bindinput="onInput"></textarea>
-    <view wx:if="{{alreadySaved}}" class="saved-notice">✓ 这一天已经有记录，请在上方选择其他日期。</view><button class="button save-button" loading="{{saving}}" disabled="{{loading || saving || alreadySaved}}" bindtap="save">{{saving ? '正在保存…' : loading ? '正在检查记录…' : alreadySaved ? '当天记录已保存' : '保存今天的记录'}}</button>
-    <view class="append-note">每个日期仅新增一条记录；已有记录可在下方查看。</view>
+  <!-- 1. 顶部 Header 与数据导出 -->
+  <view class="page-head">
+    <view>
+      <view class="brand-eyebrow">
+        <view class="pulse-dot"></view>
+        <text>A GENTLE DAILY CHECK-IN</text>
+      </view>
+      <view class="page-title">记录今天</view>
+    </view>
+
+    <!-- 顶部导出快捷入口 -->
+    <view class="export-pill-group">
+      <view class="export-pill" bindtap="exportCsv">
+        <text class="export-icon">📊</text>
+        <text>导出 CSV</text>
+      </view>
+      <view class="export-pill" bindtap="exportBackup">
+        <text class="export-icon">💾</text>
+        <text>备份</text>
+      </view>
+    </view>
   </view>
-  <view class="history-head"><view><view class="section-title">最近记录</view><view class="muted">共展示最近 {{records.length}} 条</view></view><text class="history-icon">↘</text></view>
-  <view wx:if="{{records.length}}">
-    <view wx:for="{{records}}" wx:key="id" class="history-card"><view class="history-top"><view><view class="history-date">{{item.record_date}}</view><view class="history-habits">{{item.habit_text || '习惯未勾选'}}</view></view><view class="history-weight">{{item.weight || '—'}}<text> kg</text></view></view><view class="history-metrics"><text>腰围 {{item.waist_cm || '—'}} cm</text><text>饮水 {{item.water_ml || '—'}} ml</text><text>睡眠 {{item.sleep_hours || '—'}} h</text></view><view wx:if="{{item.diet}}" class="history-diet">{{item.diet}}</view></view>
-  </view><view wx:elif="{{loading && !hasLoaded}}" class="history-card initial-fetch"><view class="loading-orbit"><view class="loading-spark"></view></view><view class="loading-copy">正在整理最近记录</view></view><view wx:else class="empty history-card">还没有记录。填下今天的一项数据，就能开始观察自己的变化。</view>
+
+  <!-- 当前记录日期选择横幅 -->
+  <view class="record-date-card card">
+    <view class="date-card-left">
+      <view class="date-icon-box">📅</view>
+      <view>
+        <view class="date-card-kicker">正在记录日期</view>
+        <view class="date-card-val">{{form.record_date}}</view>
+      </view>
+    </view>
+    <picker mode="date" value="{{form.record_date}}" bindchange="onInput" data-key="record_date">
+      <view class="pill pill-emerald date-change-pill">
+        <text>更改日期</text>
+        <text class="pill-arrow">⌄</text>
+      </view>
+    </picker>
+  </view>
+
+  <!-- 主录入表单卡片 -->
+  <view class="card form-main-card">
+    <!-- Section 01: 身体数据 -->
+    <view class="form-sec-head">
+      <view class="sec-badge sec-badge-emerald">01</view>
+      <view>
+        <view class="sec-title">身体数据</view>
+        <view class="card-subtitle">不必每天都称重，记录方便观察的项目</view>
+      </view>
+    </view>
+
+    <view class="input-grid-2">
+      <view class="record-input-tile">
+        <text class="tile-label">体重 · kg</text>
+        <view class="tile-control">
+          <input class="form-input tile-num-input" type="digit" value="{{form.weight}}" placeholder="—" data-key="weight" bindinput="onInput" />
+          <text class="tile-unit">kg</text>
+        </view>
+      </view>
+
+      <view class="record-input-tile">
+        <text class="tile-label">腰围 · cm</text>
+        <view class="tile-control">
+          <input class="form-input tile-num-input" type="digit" value="{{form.waist_cm}}" placeholder="—" data-key="waist_cm" bindinput="onInput" />
+          <text class="tile-unit">cm</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- Section 02: 日常状态 -->
+    <view class="form-sec-head form-sec-gap">
+      <view class="sec-badge sec-badge-blue">02</view>
+      <view>
+        <view class="sec-title">日常状态</view>
+        <view class="card-subtitle">关注补水、作息与饱腹体感</view>
+      </view>
+    </view>
+
+    <view class="input-grid-2">
+      <view class="record-input-tile">
+        <text class="tile-label">饮水 · ml</text>
+        <view class="tile-control">
+          <input class="form-input tile-num-input" type="number" value="{{form.water_ml}}" placeholder="如 2000" data-key="water_ml" bindinput="onInput" />
+          <text class="tile-unit">ml</text>
+        </view>
+      </view>
+
+      <view class="record-input-tile">
+        <text class="tile-label">睡眠 · 小时</text>
+        <view class="tile-control">
+          <input class="form-input tile-num-input" type="digit" value="{{form.sleep_hours}}" placeholder="如 7.5" data-key="sleep_hours" bindinput="onInput" />
+          <text class="tile-unit">h</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="form-field-wrap">
+      <text class="field-label">饮食简记</text>
+      <input class="form-input" value="{{form.diet}}" placeholder="例如：三餐规律，晚餐蔬菜过半，无夜宵" data-key="diet" bindinput="onInput" />
+    </view>
+
+    <!-- Section 03: 今天做到的小习惯 -->
+    <view class="form-sec-head form-sec-gap">
+      <view class="sec-badge sec-badge-amber">03</view>
+      <view>
+        <view class="sec-title">今天做到的小习惯</view>
+        <view class="card-subtitle">勾选达成的行动，累积正向复利</view>
+      </view>
+    </view>
+
+    <view class="habit-chips-grid">
+      <view 
+        wx:for="{{habitItems}}" 
+        wx:key="name" 
+        class="habit-btn {{item.selected ? 'habit-btn-active' : ''}}" 
+        data-item="{{item.name}}" 
+        bindtap="onHabit"
+      >
+        <view class="habit-check-mark">{{item.selected ? '✓' : '+'}}</view>
+        <text>{{item.name}}</text>
+      </view>
+    </view>
+
+    <!-- 补充备注 -->
+    <view class="form-field-wrap">
+      <text class="field-label">补充备注 · 选填</text>
+      <textarea class="form-input note-textarea" value="{{form.note}}" placeholder="写下今天身体感受或值得记住的一件事…" data-key="note" bindinput="onInput"></textarea>
+    </view>
+
+    <!-- 小米手环同步体重提示条 -->
+    <view wx:if="{{syncedMiWeightHint}}" class="mi-hint-pill">
+      <text class="mi-hint-icon">⌚</text>
+      <text>{{syncedMiWeightHint}}</text>
+    </view>
+
+    <!-- 已有记录提示 -->
+    <view wx:if="{{alreadySaved}}" class="already-notice">
+      <text class="notice-icon">✓</text>
+      <text>这一天已有手工记录，可切换上方日期查看或修改。</text>
+    </view>
+
+    <!-- 提交按钮 -->
+    <button 
+      class="btn-primary save-record-btn" 
+      loading="{{saving}}" 
+      disabled="{{loading || saving || alreadySaved}}" 
+      bindtap="save"
+    >
+      {{saving ? '正在保存…' : loading ? '正在检查记录…' : alreadySaved ? '当天手工记录已存在' : '保存今天的记录'}}
+    </button>
+    <view class="footnote-note">每个日期可保存一份手工记录；手环数据会自动在此合并汇流。</view>
+  </view>
+
+  <!-- 4. 最近记录列表 -->
+  <view class="history-section">
+    <view class="history-head-row">
+      <view>
+        <view class="card-title">历史记录流</view>
+        <view class="card-subtitle">共 {{records.length}} 天数据，含手工日常与手环同步</view>
+      </view>
+      <view class="pill pill-slate">时间流</view>
+    </view>
+
+    <!-- 筛选分段胶囊组 -->
+    <view class="history-filter-row">
+      <view class="filter-pill {{filterType === 'all' ? 'filter-active' : ''}}" data-type="all" bindtap="setFilter">
+        全部 ({{records.length}})
+      </view>
+      <view class="filter-pill {{filterType === 'mihealth' ? 'filter-active' : ''}}" data-type="mihealth" bindtap="setFilter">
+        ⌚ 手环同步
+      </view>
+      <view class="filter-pill {{filterType === 'manual' ? 'filter-active' : ''}}" data-type="manual" bindtap="setFilter">
+        📝 手工记录
+      </view>
+    </view>
+
+    <view wx:if="{{filteredRecords.length}}" class="history-list">
+      <view wx:for="{{filteredRecords}}" wx:key="record_date" class="history-card card">
+        <view class="history-card-top">
+          <view class="history-date-info">
+            <view class="history-date-row">
+              <view class="history-date-badge">{{item.record_date}}</view>
+              <view wx:if="{{item.weight_source === 'mihealth' || item.is_mihealth_only}}" class="mi-badge">
+                <text class="mi-badge-icon">⌚</text>
+                <text>{{item.is_mihealth_only ? '手环同步' : '手环体重'}}</text>
+              </view>
+            </view>
+            <view wx:if="{{item.habit_text}}" class="history-habits-text">{{item.habit_text}}</view>
+          </view>
+          <view wx:if="{{item.weight}}" class="history-weight-pill">
+            <text class="h-weight-val">{{item.weight}}</text>
+            <text class="h-weight-unit">kg</text>
+          </view>
+        </view>
+
+        <!-- 身体状态小标签行（含手环步数/卡路里/睡眠/运动） -->
+        <view class="history-metrics-row">
+          <view wx:if="{{item.steps}}" class="metric-mini-tag tag-steps">
+            <text class="tag-name">👟 步数</text>
+            <text class="tag-val">{{item.steps}} 步</text>
+          </view>
+          <view wx:if="{{item.calories}}" class="metric-mini-tag tag-cals">
+            <text class="tag-name">🔥 消耗</text>
+            <text class="tag-val">{{item.calories}} kcal</text>
+          </view>
+          <view wx:if="{{item.sleep_hours}}" class="metric-mini-tag tag-sleep">
+            <text class="tag-name">🌙 睡眠</text>
+            <text class="tag-val">{{item.sleep_hours}} h</text>
+          </view>
+          <view wx:if="{{item.workout_minutes}}" class="metric-mini-tag tag-workout">
+            <text class="tag-name">⏱️ 运动</text>
+            <text class="tag-val">{{item.workout_minutes}} min</text>
+          </view>
+          <view wx:if="{{item.waist_cm}}" class="metric-mini-tag">
+            <text class="tag-name">腰围</text>
+            <text class="tag-val">{{item.waist_cm}} cm</text>
+          </view>
+          <view wx:if="{{item.water_ml}}" class="metric-mini-tag">
+            <text class="tag-name">饮水</text>
+            <text class="tag-val">{{item.water_ml}} ml</text>
+          </view>
+        </view>
+
+        <!-- 饮食与备注 -->
+        <view wx:if="{{item.diet}}" class="history-diet-bubble">
+          <text class="bubble-icon">🥗</text>
+          <text>{{item.diet}}</text>
+        </view>
+        <view wx:if="{{item.note}}" class="history-note-text">
+          “{{item.note}}”
+        </view>
+      </view>
+    </view>
+
+    <view wx:elif="{{loading && !hasLoaded}}" class="card loading-state">
+      <view class="loading-spinner"></view>
+      <view class="loading-text">正在整理最近记录…</view>
+    </view>
+
+    <view wx:else class="card empty-box">
+      <view class="empty-icon">📝</view>
+      <view class="card-title">该筛选下暂无记录</view>
+      <view class="muted" style="margin-top: 8rpx;">选择其他分类或在上方记录今天的数据。</view>
+    </view>
+  </view>
 </view>

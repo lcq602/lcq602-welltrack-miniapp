@@ -1,77 +1,419 @@
 <view class="page" wx:if="{{dashboard}}">
+  <!-- 1. 顶部状态栏与品牌问候 -->
   <view class="page-head">
-    <view><view class="eyebrow">WELLTRACK · 每一点都算数</view><view class="title">{{configured ? '早上好，今天也慢慢来' : '建立我的健康起点'}}</view></view>
-    <view wx:if="{{configured}}" class="today-mark">今天<br/><text>{{dashboard.today_label}}</text></view>
+    <view class="head-copy">
+      <view class="brand-eyebrow">
+        <view class="pulse-dot"></view>
+        <text>WELLTRACK · 每一点都算数</text>
+      </view>
+      <view class="page-title">{{configured ? '早上好，今天也慢慢来' : '建立我的健康起点'}}</view>
+    </view>
+    <view wx:if="{{configured}}" class="today-pill">
+      <text class="today-text">{{dashboard.today_full_label || '今日'}}</text>
+      <text class="today-badge">已同步</text>
+    </view>
   </view>
 
-  <view wx:if="{{!configured}}" class="setup-panel">
+  <!-- 首次未配置状态：轻奢引导卡片 -->
+  <view wx:if="{{!configured}}" class="setup-panel card">
     <view class="setup-hero">
-      <view class="setup-art"><view class="setup-orbit setup-orbit-one"></view><view class="setup-orbit setup-orbit-two"></view><view class="setup-monogram">W</view></view>
-      <view class="setup-step">YOUR STARTING POINT　·　01 / 03</view>
+      <view class="setup-step">YOUR STARTING POINT · 01 / 03</view>
       <view class="setup-heading">从适合自己的节奏开始</view>
-      <view class="setup-copy">记录现在的状态，之后可以随时调整目标。</view>
+      <view class="setup-copy">记录现在的状态，之后可以按生活节奏随时调整目标。</view>
     </view>
+
     <view class="setup-form">
-      <view class="setup-field"><text class="field-label">身高</text><view class="setup-control"><input class="input setup-input" type="digit" placeholder="例如 168" data-key="height_cm" bindinput="onInput" /><text class="setup-unit">cm</text></view></view>
-      <view class="setup-grid">
-        <view class="setup-field"><text class="field-label">当前体重</text><view class="setup-control"><input class="input setup-input" type="digit" placeholder="例如 65" data-key="current_weight" bindinput="onInput" /><text class="setup-unit">kg</text></view></view>
-        <view class="setup-field"><text class="field-label">目标体重</text><view class="setup-control"><input class="input setup-input" type="digit" placeholder="例如 60" data-key="target_weight" bindinput="onInput" /><text class="setup-unit">kg</text></view></view>
+      <view class="setup-field">
+        <text class="field-label">身高</text>
+        <view class="control-box">
+          <input class="form-input" type="digit" placeholder="例如 170" data-key="height_cm" bindinput="onInput" />
+          <text class="input-unit">cm</text>
+        </view>
       </view>
-      <view class="setup-field"><text class="field-label">计划开始日期</text><picker mode="date" bindchange="onInput" data-key="start_date"><view class="setup-control setup-picker"><text>{{form.start_date || '选择开始日期'}}</text><text class="setup-arrow">›</text></view></picker></view>
-      <view class="setup-field"><text class="field-label">这阶段更关注</text><picker range="{{goalOptions}}" bindchange="onGoal"><view class="setup-control setup-picker"><text>{{goalLabel}}</text><text class="setup-arrow">⌄</text></view></picker></view>
-      <button class="button setup-submit" loading="{{saving}}" disabled="{{saving}}" bindtap="saveProfile">{{saving ? '正在建立…' : '创建我的健康计划'}}</button>
-      <view class="setup-reassurance"><view class="reassurance-mark">i</view><text>不追求极端速度，计划可以按你的生活节奏调整。</text></view>
+
+      <view class="setup-grid">
+        <view class="setup-field">
+          <text class="field-label">当前体重</text>
+          <view class="control-box">
+            <input class="form-input" type="digit" placeholder="例如 65" data-key="current_weight" bindinput="onInput" />
+            <text class="input-unit">kg</text>
+          </view>
+        </view>
+        <view class="setup-field">
+          <text class="field-label">目标体重</text>
+          <view class="control-box">
+            <input class="form-input" type="digit" placeholder="例如 60" data-key="target_weight" bindinput="onInput" />
+            <text class="input-unit">kg</text>
+          </view>
+        </view>
+      </view>
+
+      <view class="setup-field">
+        <text class="field-label">计划开始日期</text>
+        <picker mode="date" bindchange="onInput" data-key="start_date">
+          <view class="picker-field">
+            <text>{{form.start_date || '选择开始日期'}}</text>
+            <text class="picker-arrow">›</text>
+          </view>
+        </picker>
+      </view>
+
+      <view class="setup-field">
+        <text class="field-label">阶段重点关注</text>
+        <picker range="{{goalOptions}}" bindchange="onGoal">
+          <view class="picker-field">
+            <text>{{goalLabel}}</text>
+            <text class="picker-arrow">⌄</text>
+          </view>
+        </picker>
+      </view>
+
+      <button class="btn-primary setup-submit" loading="{{saving}}" disabled="{{saving}}" bindtap="saveProfile">
+        {{saving ? '正在建立计划…' : '创建我的健康计划'}}
+      </button>
+
+      <view class="footnote-note">💡 不追求极端速度，计划可以按你的生活节奏轻松调整。</view>
     </view>
   </view>
 
+  <!-- 已配置状态：主仪表盘 -->
   <block wx:if="{{configured}}">
-    <view class="hero-card">
-      <view class="hero-top"><text class="hero-label">我的管理方向</text><text class="hero-tag">{{dashboard.goal_label}}</text></view>
-      <view class="hero-caption">当前体重</view>
-      <view class="hero-weight">{{dashboard.current_weight || '--'}}<text> kg</text></view>
-      <view wx:if="{{dashboard.current_weight_source === 'mihealth'}}" class="weight-source-note">数据来源：小米运动健康</view>
-      <view class="hero-bottom"><view><text class="hero-caption">{{dashboard.goal_key === 'maintenance' ? '体重参考值' : '目标体重'}}</text><text class="hero-target">{{dashboard.target_weight}} kg</text></view><view wx:if="{{dashboard.show_goal_progress}}" class="hero-progress-label">{{dashboard.progress_label}} {{dashboard.goal_progress}}%</view><view wx:else class="hero-progress-label">以稳定为主</view></view>
-      <view wx:if="{{dashboard.show_goal_progress}}" class="progress"><view class="progress-inner" style="width: {{dashboard.goal_progress}}%;"></view></view>
-      <view class="hero-foot">{{dashboard.goal_key === 'healthy_habits' ? '把运动、饮水、饮食与睡眠逐渐变成日常' : '持续记录，关注自己的变化趋势'}}</view>
-    </view>
-
-    <view class="journey-heading">开启你的健康旅程</view>
-    <scroll-view class="journey-scroll" scroll-x="true" enhanced="true" show-scrollbar="false">
-      <view class="journey-track">
-        <view class="journey-card">
-          <view class="journey-art art-body"><view class="art-orbit orbit-one"></view><view class="art-orbit orbit-two"></view><view class="art-core">W</view><view class="art-badge">START HERE</view></view>
-          <view class="journey-copy"><view class="journey-title">身体状态</view><view class="journey-desc">用体重、腰围和 BMI，建立自己的观察基线。</view><view class="journey-cta" bindtap="openRecords">开始记录 <text>→</text></view></view>
+    <!-- 2. Hero 中心健康聚焦卡片 -->
+    <view class="hero-card card">
+      <view class="hero-top">
+        <view class="hero-status">
+          <text class="card-kicker">当前状态</text>
+          <view class="pill pill-emerald hero-goal-pill">
+            <text class="pill-spark">✳</text>
+            <text>{{dashboard.goal_label}}</text>
+          </view>
         </view>
-        <view class="journey-card">
-          <view class="journey-art art-training"><view class="wave wave-one"></view><view class="wave wave-two"></view><view class="wave wave-three"></view><view class="art-badge">MOVE YOUR WAY</view></view>
-          <view class="journey-copy"><view class="journey-title">训练计划</view><view class="journey-desc">为这一周安排训练、散步和休息。</view><view class="journey-cta" bindtap="openPlan">查看周计划 <text>→</text></view></view>
-        </view>
-        <view class="journey-card">
-          <view class="journey-art art-progress"><view class="progress-shape shape-one"></view><view class="progress-shape shape-two"></view><view class="art-badge">YOUR OWN PACE</view></view>
-          <view class="journey-copy"><view class="journey-title">每一步都看得见</view><view class="journey-desc">复盘体重、腰围和日常习惯的变化。</view><view class="journey-cta" bindtap="openAnalysis">查看趋势 <text>→</text></view></view>
+        <view class="hero-target-hint">
+          <text>目标 {{dashboard.target_weight}} kg</text>
+          <text wx:if="{{dashboard.remaining_weight}}" class="remaining-tag"> · {{dashboard.remaining_weight}}</text>
         </view>
       </view>
-    </scroll-view>
 
-    <view class="metric-row">
-      <view class="metric-card"><view class="metric-icon bmi-icon">BMI</view><view class="metric-number">{{dashboard.bmi || '--'}}</view><view class="metric-label">身体质量指数</view><view class="metric-hint">仅供参考</view></view>
-      <view class="metric-card"><view class="metric-icon week-icon">7D</view><view class="metric-number">{{dashboard.record_days_7d || 0}}<text class="metric-unit">/7</text></view><view class="metric-label">近 7 天记录</view><view class="metric-hint">运动 {{dashboard.exercise_count_7d}} 次</view></view>
+      <view class="hero-main">
+        <view class="hero-weight-wrap">
+          <view class="hero-weight-row">
+            <text class="hero-weight-num">{{dashboard.current_weight || '--'}}</text>
+            <text class="hero-weight-unit">kg</text>
+            <view wx:if="{{dashboard.diff_label}}" class="hero-diff-pill">
+              {{dashboard.diff_label}}
+            </view>
+          </view>
+          <view class="hero-subtext">
+            {{dashboard.current_weight_source === 'mihealth' ? '数据源自小米运动健康同步' : '持续记录，见证身体点滴变化'}}
+          </view>
+        </view>
+
+        <!-- 环形进度圈 -->
+        <view wx:if="{{dashboard.show_goal_progress}}" class="hero-gauge">
+          <view class="gauge-circle">
+            <text class="gauge-percent">{{dashboard.goal_progress}}%</text>
+            <text class="gauge-label">达成</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 进度指示条 -->
+      <view wx:if="{{dashboard.show_goal_progress}}" class="hero-progress-track">
+        <view class="hero-progress-fill" style="width: {{dashboard.goal_progress}}%;"></view>
+      </view>
+
+      <view class="hero-foot-row">
+        <text class="hero-foot-label">{{dashboard.progress_label}}</text>
+        <text class="hero-foot-value">{{dashboard.goal_progress}}%</text>
+      </view>
     </view>
 
-    <view class="section-heading"><view><view class="section-title">今天，照顾好自己</view><view class="muted">小行动比完美计划更重要</view></view><text class="section-count">{{dashboard.todos.length}} 项</text></view>
-    <view class="todo-card">
-      <view wx:for="{{dashboard.todos}}" wx:key="*this" class="todo-item"><view class="todo-dot"></view><text>{{item}}</text></view>
-      <view class="action-pair"><button class="action-button action-primary" bindtap="openRecords">＋ 记录今天</button><button class="action-button action-secondary" bindtap="openExercise">记一笔运动</button></view>
+    <!-- 3. Metric Bento Grid 便签数据网格 -->
+    <view class="bento-grid">
+      <!-- Bento 1: BMI 指数 -->
+      <view class="bento-tile bento-bmi card">
+        <view class="bento-header">
+          <text class="bento-title">BMI 指数</text>
+          <view class="pill {{dashboard.bmi_pill_class}}">{{dashboard.bmi_status}}</view>
+        </view>
+        <view class="bento-body">
+          <view class="bento-value">{{dashboard.bmi || '--'}}</view>
+          <text class="bento-hint">标准区间 18.5 ~ 23.9</text>
+        </view>
+        <view class="bmi-spectrum">
+          <view class="bmi-spectrum-bar">
+            <view class="spec-seg spec-blue"></view>
+            <view class="spec-seg spec-green"></view>
+            <view class="spec-seg spec-amber"></view>
+          </view>
+          <view class="bmi-spectrum-labels">
+            <text>偏瘦</text>
+            <text class="active-dot">● 正常</text>
+            <text>偏重</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- Bento 2: 7天打卡覆盖 -->
+      <view class="bento-tile bento-streak card">
+        <view class="bento-header">
+          <text class="bento-title">7天记录打卡</text>
+          <view class="streak-flame">🔥</view>
+        </view>
+        <view class="bento-body">
+          <view class="bento-value">{{dashboard.record_days_7d || 0}}<text class="unit-sub">/7 天</text></view>
+          <text class="bento-hint">近7天有记录天数</text>
+        </view>
+        <!-- 7天圆点打卡状态 -->
+        <view class="streak-dots">
+          <view wx:for="{{dashboard.trend}}" wx:key="record_date" class="dot-item {{item.has_record ? 'dot-recorded' : 'dot-empty'}} {{item.is_today ? 'dot-today' : ''}}">
+            <text wx:if="{{item.has_record}}">✓</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- Bento 3: 运动活力 (跨列) -->
+      <view class="bento-tile bento-activity card bento-wide">
+        <view class="activity-left">
+          <view class="activity-icon-box">🏃</view>
+          <view class="activity-info">
+            <view class="activity-title-row">
+              <text class="activity-name">运动活力</text>
+              <view class="pill pill-blue">本周达标</view>
+            </view>
+            <view class="activity-desc">本周 {{dashboard.exercise_count_7d || 0}} 次运动打卡</view>
+            <view class="activity-meta">坚持活动，提升日常心肺与代谢</view>
+          </view>
+        </view>
+        <view class="activity-badge">
+          <text class="activity-num">{{dashboard.exercise_count_7d || 0}}</text>
+          <text class="activity-unit">次</text>
+        </view>
+      </view>
     </view>
 
-    <view class="section-heading"><view><view class="section-title">体重的近况</view><view class="muted">近 7 天趋势 · 变化无需每天相同</view></view><navigator class="mini-link" url="/pages/analysis/analysis">看分析 →</navigator></view>
-    <view class="trend-card" wx:if="{{dashboard.trend.length}}">
-      <view class="trend-summary"><text class="trend-latest">{{dashboard.current_weight || '--'}}<text> kg</text></text><text class="muted">目标 {{dashboard.target_weight}} kg</text></view>
-      <view class="trend-bars"><view wx:for="{{dashboard.trend}}" wx:key="record_date" class="trend-col"><text class="trend-value">{{item.weight || ''}}</text><view class="trend-track"><view class="trend-bar {{item.has_record ? '' : 'trend-bar-empty'}}" style="height: {{item.bar_height}}rpx;"></view></view><text class="trend-date">{{item.day_label}}</text></view></view>
+    <!-- 3.5 小米运动健康 · 今日活力看板 -->
+    <view class="vitality-card card">
+      <view class="vitality-header">
+        <view class="vitality-title-wrap">
+          <view class="vitality-badge-dot {{dashboard.mihealth.connected ? 'dot-active' : ''}}"></view>
+          <view>
+            <view class="vitality-card-title">小米运动健康 · 活力看板</view>
+            <view class="card-subtitle">
+              {{dashboard.mihealth.connected ? (dashboard.mihealth.last_synced_at ? '数据已同步于 ' + dashboard.mihealth.last_synced_at : '今日活力数据已就绪') : '连接小米手环/手表，自动同步全天活力'}}
+            </view>
+          </view>
+        </view>
+        <view wx:if="{{dashboard.mihealth.connected}}" class="vitality-action-btn" bindtap="syncMiHealth">
+          <text class="vitality-sync-icon {{syncingMi ? 'spinning' : ''}}">⚡</text>
+          <text>{{syncingMi ? '同步中…' : '刷新'}}</text>
+        </view>
+        <view wx:else class="pill pill-blue" bindtap="openMine">
+          去连接 ›
+        </view>
+      </view>
+
+      <!-- 4项指标 Bento 网格 -->
+      <view class="vitality-grid">
+        <!-- 1. 今日步数 -->
+        <view class="vitality-tile tile-steps">
+          <view class="v-tile-top">
+            <text class="v-tile-label">今日步数</text>
+            <text class="v-tile-icon">👟</text>
+          </view>
+          <view class="v-tile-val-row">
+            <text class="v-tile-num">{{dashboard.mihealth.today.steps || 0}}</text>
+            <text class="v-tile-unit">步</text>
+          </view>
+          <view class="v-progress-track">
+            <view class="v-progress-fill fill-emerald" style="width: {{dashboard.step_progress}}%;"></view>
+          </view>
+          <view class="v-tile-foot">目标 8,000 步 · {{dashboard.step_progress}}%</view>
+        </view>
+
+        <!-- 2. 能量消耗 -->
+        <view class="vitality-tile tile-cals">
+          <view class="v-tile-top">
+            <text class="v-tile-label">消耗能量</text>
+            <text class="v-tile-icon">🔥</text>
+          </view>
+          <view class="v-tile-val-row">
+            <text class="v-tile-num">{{dashboard.mihealth.today.calories || 0}}</text>
+            <text class="v-tile-unit">kcal</text>
+          </view>
+          <view class="v-progress-track">
+            <view class="v-progress-fill fill-amber" style="width: {{dashboard.cal_progress}}%;"></view>
+          </view>
+          <view class="v-tile-foot">日常动态代谢消耗</view>
+        </view>
+
+        <!-- 3. 昨夜睡眠 -->
+        <view class="vitality-tile tile-sleep">
+          <view class="v-tile-top">
+            <text class="v-tile-label">昨夜睡眠</text>
+            <text class="v-tile-icon">🌙</text>
+          </view>
+          <view class="v-tile-val-row">
+            <text class="v-tile-num">{{dashboard.mihealth.today.sleep_hours || '--'}}</text>
+            <text class="v-tile-unit">小时</text>
+          </view>
+          <view class="v-tile-foot {{dashboard.mihealth.today.sleep_hours >= 7 ? 'status-good' : ''}}">
+            {{dashboard.mihealth.today.sleep_hours >= 7 ? '✨ 作息充足' : dashboard.mihealth.today.sleep_hours ? '需注意补觉' : '手环自动监测'}}
+          </view>
+        </view>
+
+        <!-- 4. 有效运动 -->
+        <view class="vitality-tile tile-active">
+          <view class="v-tile-top">
+            <text class="v-tile-label">有效运动</text>
+            <text class="v-tile-icon">⏱️</text>
+          </view>
+          <view class="v-tile-val-row">
+            <text class="v-tile-num">{{dashboard.mihealth.today.workout_minutes || 0}}</text>
+            <text class="v-tile-unit">分钟</text>
+          </view>
+          <view class="v-tile-foot {{dashboard.mihealth.today.workout_minutes >= 30 ? 'status-good' : ''}}">
+            {{dashboard.mihealth.today.workout_minutes >= 30 ? '🔥 今日达标' : '建议每日 30 分钟'}}
+          </view>
+        </view>
+      </view>
+
+      <!-- 未连接时的轻引导提示条 -->
+      <view wx:if="{{!dashboard.mihealth.connected}}" class="vitality-connect-hint" bindtap="openMine">
+        <text class="hint-icon">💡</text>
+        <text class="hint-text">支持小米手环、手表与体脂秤数据无感同步</text>
+        <text class="hint-arrow">去绑定 ›</text>
+      </view>
     </view>
-    <view wx:else class="empty trend-card"><view class="empty-mark">↗</view>开始记录后，这里会逐渐出现你的体重趋势。</view>
-    <view class="health-note">BMI 与记录用于自我观察，不构成疾病诊断或减重速度承诺。</view>
+
+    <!-- 4. 今天，照顾好自己行动清单 -->
+    <view class="action-card card">
+      <view class="action-card-header">
+        <view>
+          <view class="card-title">今天，照顾好自己</view>
+          <view class="card-subtitle">小行动比完美计划更重要</view>
+        </view>
+        <view class="pill pill-emerald">{{dashboard.todos.length}} 项行动</view>
+      </view>
+
+      <view class="action-list">
+        <view wx:for="{{dashboard.todos}}" wx:key="*this" class="action-item">
+          <view class="action-item-left">
+            <view class="action-icon">✓</view>
+            <text class="action-text">{{item}}</text>
+          </view>
+          <view class="action-item-status">已规划</view>
+        </view>
+      </view>
+
+      <!-- 双核心快捷操作按钮（黄金比例并排） -->
+      <view class="btn-row action-btn-row">
+        <button class="btn-primary action-btn-main" bindtap="openRecords">
+          <text class="btn-icon">＋</text>
+          <text>记录今天</text>
+        </button>
+        <button class="btn-secondary action-btn-sub" bindtap="openExercise">
+          <text class="btn-icon">⚡</text>
+          <text>记一笔运动</text>
+        </button>
+      </view>
+    </view>
+
+    <!-- 5. 7天体重波动图 -->
+    <view class="trend-section card">
+      <view class="trend-section-header">
+        <view>
+          <view class="card-title">7天体重波动</view>
+          <view class="card-subtitle">平稳渐进 · 关注整体走势</view>
+        </view>
+        <view class="trend-header-right">
+          <view class="pill pill-slate">目标 {{dashboard.target_weight}} kg</view>
+          <navigator class="trend-link" url="/pages/analysis/analysis">看分析 ›</navigator>
+        </view>
+      </view>
+
+      <view class="trend-chart-box" wx:if="{{dashboard.trend.length}}">
+        <!-- 基准线 -->
+        <view class="trend-baseline-line"></view>
+
+        <!-- 柱状波动图 -->
+        <view class="trend-bar-row">
+          <view wx:for="{{dashboard.trend}}" wx:key="record_date" class="trend-bar-col {{item.is_today ? 'trend-col-today' : ''}}">
+            <view wx:if="{{item.weight}}" class="bar-weight-tag {{item.is_today ? 'tag-today' : ''}}">
+              {{item.weight}}
+            </view>
+            <view class="trend-bar-track">
+              <view 
+                class="trend-bar-pill {{item.has_record ? 'bar-filled' : 'bar-empty'}} {{item.is_today ? 'bar-today' : ''}}" 
+                style="height: {{item.bar_height}}rpx;"
+              ></view>
+            </view>
+            <text class="trend-weekday {{item.is_today ? 'weekday-today' : ''}}">{{item.weekday}}</text>
+          </view>
+        </view>
+      </view>
+      <view wx:else class="empty-box">
+        <view class="empty-icon">↗</view>
+        <text>开始记录后，这里会展示你清晰的体重波动走势。</text>
+      </view>
+    </view>
+
+    <!-- 6. 横向探索卡片 -->
+    <view class="journey-section">
+      <view class="journey-header">
+        <text class="journey-heading">开启你的健康旅程</text>
+        <text class="journey-hint">滑动查看</text>
+      </view>
+      <scroll-view class="journey-scroll" scroll-x="true" enhanced="true" show-scrollbar="false">
+        <view class="journey-track">
+          <!-- 卡片 1 -->
+          <view class="journey-card card-j-emerald" bindtap="openRecords">
+            <view class="j-icon-squircle">📏</view>
+            <view class="j-body">
+              <view class="j-title">身体基线</view>
+              <view class="j-desc">用体重、腰围和 BMI，建立自己的观察基准。</view>
+            </view>
+            <view class="j-link">开始记录 ›</view>
+          </view>
+          <!-- 卡片 2 -->
+          <view class="journey-card card-j-blue" bindtap="openPlan">
+            <view class="j-icon-squircle">📅</view>
+            <view class="j-body">
+              <view class="j-title">周训练计划</view>
+              <view class="j-desc">为这一周安排力量、有氧与放松恢复。</view>
+            </view>
+            <view class="j-link">查看周计划 ›</view>
+          </view>
+          <!-- 卡片 3 -->
+          <view class="journey-card card-j-purple" bindtap="openAnalysis">
+            <view class="j-icon-squircle">📈</view>
+            <view class="j-body">
+              <view class="j-title">每一步看得见</view>
+              <view class="j-desc">复盘生理波动、睡眠时长与小习惯坚持度。</view>
+            </view>
+            <view class="j-link">查看趋势复盘 ›</view>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+
+    <view class="footnote-note health-disclaimer">
+      BMI 与数据记录用于健康自我管理，不构成医疗诊断或特定减重速度承诺。
+    </view>
   </block>
 </view>
-<view wx:elif="{{loading}}" class="loading-state"><view class="loading-orbit"><view class="loading-spark"></view></view><view class="loading-copy">把今天的状态慢慢整理好</view><view class="loading-caption">WELLTRACK · 正在同步</view></view>
-<view wx:else class="error-state"><view class="error-mark">!</view><view class="section-title">暂时连接不上</view><view class="muted">{{loadError}}</view><button class="button" bindtap="retryLoad">重新连接</button></view>
+
+<!-- 加载状态 -->
+<view wx:elif="{{loading}}" class="loading-state">
+  <view class="loading-spinner"></view>
+  <view class="loading-text">正在同步健康数据…</view>
+  <view class="loading-sub">WELLTRACK · 每一点都算数</view>
+</view>
+
+<!-- 错误状态 -->
+<view wx:else class="error-state">
+  <view class="error-mark">!</view>
+  <view class="card-title">暂时连接不上服务</view>
+  <view class="muted">{{loadError}}</view>
+  <button class="btn-primary" style="margin-top: 30rpx; width: 280rpx;" bindtap="retryLoad">重新连接</button>
+</view>

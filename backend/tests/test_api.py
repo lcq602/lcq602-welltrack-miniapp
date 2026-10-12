@@ -210,11 +210,12 @@ def test_mihealth_connector_normalizes_upstream_samples(monkeypatch):
                     {"sid": "band", "time": 1791435600, "value": '{"steps":4000}'},
                     {"sid": "phone", "time": 1791435660, "value": '{"steps":2500}'},
                 ],
+                "calories": [{"sid": "band", "time": 1791435600, "value": '{"calories":380.5}'}],
             }
-            return {"data_list": samples[key]}
+            return {"data_list": samples.get(key, [])}
 
         def get_sport_records_all(self, start_ms, end_ms, max_pages):
-            return {"sport_records": [{"sid": "band", "key": "run", "time": 1791435600, "value": '{"sport_type":"running","duration":1800}'}]}
+            return {"sport_records": [{"sid": "band", "key": "run", "time": 1791435600, "value": '{"sport_type":"running","duration":1800,"calories":150}'}]}
 
     monkeypatch.setattr(mihealth.mi_client, "MiHealthClient", FakeClient)
     readings = mihealth.read_mihealth_metrics(
@@ -227,6 +228,8 @@ def test_mihealth_connector_normalizes_upstream_samples(monkeypatch):
     assert sum(row["value"] for row in step_rows) == 6500
     assert len(step_rows) == 2
     assert by_metric["workout_minutes"]["value"] == 30
+    cal_rows = [row for row in readings if row["metric"] == "calories"]
+    assert sum(row["value"] for row in cal_rows) == 530.5
 
 
 def test_mihealth_session_is_encrypted_and_bad_keys_are_rejected():
@@ -509,3 +512,93 @@ def test_mihealth_connector_rejects_truncated_pages(monkeypatch):
         assert "缩短" in str(error)
     else:
         raise AssertionError("truncated upstream result must not be reported as complete")
+
+
+def test_mihealth_weight_and_vitality_in_records_history_and_analytics(tmp_path, monkeypatch):
+    """验证手环同步的体重和活力指标进入历史记录列表、首页看板与分析图表。"""
+    from datetime import date, timedelta
+    client = client_at(tmp_path, monkeypatch)
+    login(client)
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+
+    # 用户昨天手工填写了日常状态，但未填体重
+    manual_rec = {
+        "record_date": str(yesterday),
+        "weight": None,
+        "waist_cm": 82.0,
+        "water_ml": 2000,
+        "sleep_hours": None,
+        "habits": ["喝够水", "散步"],
+        "diet": "清淡",
+        "note": "感觉良好",
+    }
+    assert client.post("/api/v1/records", json=manual_rec).status_code == 201
+
+    with db.read_connection() as conn:
+        uid = conn.execute("SELECT user_id FROM sessions LIMIT 1").fetchone()["user_id"]
+
+    # 模拟手环同步数据：
+    # 1. 昨天：同步了体重 68.8kg，步数 6000，卡路里 350.0
+    # 2. 今天：用户未手工记录任何数据，手环自动同步了体重 68.5kg，步数 7500，卡路里 420.5，睡眠 7.5h，运动 30min
+    with db.transaction() as conn:
+        conn.execute("INSERT INTO mihealth_imports(user_id,source_id,metric,recorded_at,value,unit) VALUES(?,?,?,?,?,?)",
+                     (uid, "scale:yesterday", "weight", f"{yesterday}T08:00:00", 68.8, "kg"))
+        conn.execute("INSERT INTO mihealth_imports(user_id,source_id,metric,recorded_at,value,unit) VALUES(?,?,?,?,?,?)",
+                     (uid, "steps:yesterday", "steps", f"{yesterday}T23:59:00", 6000, "steps"))
+        conn.execute("INSERT INTO mihealth_imports(user_id,source_id,metric,recorded_at,value,unit) VALUES(?,?,?,?,?,?)",
+                     (uid, "cal:yesterday", "calories", f"{yesterday}T23:59:00", 350.0, "kcal"))
+
+        conn.execute("INSERT INTO mihealth_imports(user_id,source_id,metric,recorded_at,value,unit) VALUES(?,?,?,?,?,?)",
+                     (uid, "scale:today", "weight", f"{today}T08:00:00", 68.5, "kg"))
+        conn.execute("INSERT INTO mihealth_imports(user_id,source_id,metric,recorded_at,value,unit) VALUES(?,?,?,?,?,?)",
+                     (uid, "steps:today", "steps", f"{today}T18:00:00", 7500, "steps"))
+        conn.execute("INSERT INTO mihealth_imports(user_id,source_id,metric,recorded_at,value,unit) VALUES(?,?,?,?,?,?)",
+                     (uid, "cal:today", "calories", f"{today}T18:00:00", 420.5, "kcal"))
+        conn.execute("INSERT INTO mihealth_imports(user_id,source_id,metric,recorded_at,value,unit) VALUES(?,?,?,?,?,?)",
+                     (uid, "sleep:today", "sleep_hours", f"{today}T07:30:00", 7.5, "h"))
+        conn.execute("INSERT INTO mihealth_imports(user_id,source_id,metric,recorded_at,value,unit) VALUES(?,?,?,?,?,?)",
+                     (uid, "workout:today", "workout_minutes", f"{today}T19:00:00", 30.0, "min"))
+
+    # 1. 验证历史记录接口 GET /api/v1/records 必须包含今天的只读同步记录与昨天的合并记录
+    records = client.get("/api/v1/records").json()
+    assert len(records) == 2
+
+    today_item = next(r for r in records if r["record_date"] == str(today))
+    assert today_item["weight"] == 68.5
+    assert today_item["weight_source"] == "mihealth"
+    assert today_item["is_mihealth_only"] is True
+    assert today_item["id"] is None
+    assert today_item["steps"] == 7500
+    assert today_item["calories"] == 420.5
+    assert today_item["sleep_hours"] == 7.5
+    assert today_item["workout_minutes"] == 30.0
+
+    yesterday_item = next(r for r in records if r["record_date"] == str(yesterday))
+    assert yesterday_item["weight"] == 68.8
+    assert yesterday_item["weight_source"] == "mihealth"
+    assert yesterday_item["is_mihealth_only"] is False
+    assert yesterday_item["id"] is not None
+    assert yesterday_item["water_ml"] == 2000
+    assert yesterday_item["habits"] == ["喝够水", "散步"]
+    assert yesterday_item["steps"] == 6000
+    assert yesterday_item["calories"] == 350.0
+
+    # 2. 验证首页仪表盘 GET /api/v1/dashboard 包含今日手环活力数据
+    dashboard = client.get("/api/v1/dashboard").json()
+    assert dashboard["current_weight"] == 68.5
+    assert dashboard["current_weight_source"] == "mihealth"
+    today_vitality = dashboard["mihealth"]["today"]
+    assert today_vitality["steps"] == 7500
+    assert today_vitality["calories"] == 420.5
+    assert today_vitality["sleep_hours"] == 7.5
+    assert today_vitality["workout_minutes"] == 30.0
+
+    # 3. 验证分析复盘接口 GET /api/v1/analytics 聚合了步数、卡路里、运动与睡眠
+    analysis = client.get("/api/v1/analytics?period=month").json()
+    assert analysis["total_steps"] == 13500
+    assert analysis["total_calories"] == 770.5
+    assert analysis["average_steps"] == 6750
+    assert analysis["average_calories"] == 385.2
+    assert analysis["average_sleep"] == 7.5
+
