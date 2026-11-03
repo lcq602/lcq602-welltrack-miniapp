@@ -1,0 +1,63 @@
+name: Upload Mini Program (手动上传微信)
+
+# 仅手动触发。需要在仓库 Settings → Secrets 配置:
+#   WECHAT_APPID        小程序 AppID
+#   WECHAT_PRIVATE_KEY  小程序上传密钥 (在微信公众平台「开发管理-开发设置」生成并下载,
+#                       把密钥文件全文粘贴为 Secret; 同时要在公众平台把 GitHub 的 IP
+#                       加入上传白名单, 否则会上传失败)
+# 未配置 Secret 时本流程会打印说明并跳过, 不会报错红掉。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号, 如 1.0.0"
+        required: true
+      desc:
+        description: "版本描述"
+        required: false
+        default: "CI 自动上传"
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 检查 Secret 是否配置
+        id: check
+        env:
+          APPID: ${{ secrets.WECHAT_APPID }}
+        run: |
+          if [ -z "$APPID" ]; then
+            echo "未配置 WECHAT_APPID / WECHAT_PRIVATE_KEY, 跳过上传。请先在仓库 Secrets 中配置。"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          node-version: "20"
+      - name: 安装 miniprogram-ci
+        if: steps.check.outputs.ready == 'true'
+        run: npm install -g miniprogram-ci
+      - name: 写入上传密钥
+        if: steps.check.outputs.ready == 'true'
+        env:
+          KEY: ${{ secrets.WECHAT_PRIVATE_KEY }}
+        run: printf '%s' "$KEY" > private.key
+      - name: 上传小程序
+        if: steps.check.outputs.ready == 'true'
+        env:
+          APPID: ${{ secrets.WECHAT_APPID }}
+        run: |
+          miniprogram-ci upload \
+            --pp . \
+            --pkp private.key \
+            --appid "$APPID" \
+            --uv "${{ inputs.version }}" \
+            --ud "${{ inputs.desc }}" \
+            --enable-es6 true \
+            --enable-minify true
+      - name: 清理密钥
+        if: always()
+        run: rm -f private.key
