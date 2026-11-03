@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -25,6 +26,9 @@ import java.util.concurrent.Executors;
  */
 public class ApiClient {
     public static final String API_DEFAULT = "https://qelora.art";
+    /** 健康智能体服务 (Cloudflare Worker, 与主后端是独立的一套会话) */
+    public static final String AGENT_BASE = "https://welltrack-api.sry602.workers.dev";
+    private static final String AGENT_TOKEN_KEY = "welltrack_agent_token";
     private static ApiClient instance;
 
     private final SharedPreferences prefs;
@@ -90,6 +94,54 @@ public class ApiClient {
         });
     }
 
+    public String getAgentToken() {
+        String t = prefs.getString(AGENT_TOKEN_KEY, "");
+        return t == null ? "" : t;
+    }
+
+    /**
+     * 智能体对话 (POST AGENT_BASE/api/v1/agent/chat):
+     * 先在 Worker 侧建匿名会话 (token 存 welltrack_agent_token), 401 清 token 重建重试一次。
+     * history 为既往轮次 [{role, content}...], context 为 App 组装的用户数据摘要字符串。
+     */
+    public void agentChat(String message, JSONArray history, String context, Callback cb) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("message", message);
+                body.put("history", history == null ? new JSONArray() : history);
+                body.put("context", context == null ? "" : context);
+                JSONObject data = agentChatSync(body, true);
+                main.post(() -> cb.onOk(data, 200));
+            } catch (Exception e) {
+                main.post(() -> cb.onError(friendly(e)));
+            }
+        });
+    }
+
+    private void ensureAgentSession() throws Exception {
+        if (!getAgentToken().isEmpty()) return;
+        String text = rawRequestTo(AGENT_BASE, "/api/v1/auth/local", "POST", new JSONObject(), null);
+        JSONObject obj = new JSONObject(text);
+        prefs.edit().putString(AGENT_TOKEN_KEY, obj.optString("token", "")).apply();
+    }
+
+    private JSONObject agentChatSync(JSONObject body, boolean retry) throws Exception {
+        ensureAgentSession();
+        try {
+            // 大模型生成可能较慢, 单独放宽读取超时
+            String text = rawRequestTo(AGENT_BASE, "/api/v1/agent/chat", "POST", body, getAgentToken(), 60000);
+            return new JSONObject(text);
+        } catch (HttpError e) {
+            if (e.status == 401 && retry) {
+                prefs.edit().remove(AGENT_TOKEN_KEY).apply();
+                ensureAgentSession();
+                return agentChatSync(body, false);
+            }
+            throw e;
+        }
+    }
+
     private String friendly(Exception e) {
         String m = e.getMessage();
         return (m == null || m.isEmpty()) ? "请求失败" : m;
@@ -137,10 +189,19 @@ public class ApiClient {
     }
 
     private String rawRequest(String path, String method, JSONObject body, String token) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URL(getApiBase() + path).openConnection();
+        return rawRequestTo(getApiBase(), path, method, body, token);
+    }
+
+    private String rawRequestTo(String base, String path, String method, JSONObject body, String token) throws Exception {
+        return rawRequestTo(base, path, method, body, token, 20000);
+    }
+
+    private String rawRequestTo(String base, String path, String method, JSONObject body, String token,
+                                int readTimeoutMs) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(base + path).openConnection();
         conn.setRequestMethod(method);
         conn.setConnectTimeout(15000);
-        conn.setReadTimeout(20000);
+        conn.setReadTimeout(readTimeoutMs);
         conn.setRequestProperty("Accept", "application/json");
         if (token != null && !token.isEmpty()) conn.setRequestProperty("Authorization", "Bearer " + token);
         if (body != null) {

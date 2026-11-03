@@ -1,0 +1,17 @@
+# WellTrack API — Cloudflare Worker 配置 (wrangler 部署与 API 部署二选一, 本文件供 wrangler 使用)
+name = "welltrack-api"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "welltrack-db"
+database_id = "fac4aade-22ac-4e32-a7ca-60bb91defccc"
+
+[ai]
+binding = "AI"
+
+[vars]
+MIHEALTH_ENABLED = "false"
+AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+# 密钥类变量不要写在这里: 用 `wrangler secret put MIHEALTH_TOKEN_KEY` / WECHAT_APP_SECRET 设置

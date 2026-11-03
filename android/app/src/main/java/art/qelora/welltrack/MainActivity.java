@@ -11,6 +11,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import art.qelora.welltrack.pages.AgentPage;
 import art.qelora.welltrack.pages.AnalysisPage;
 import art.qelora.welltrack.pages.ExercisePage;
 import art.qelora.welltrack.pages.IndexPage;
@@ -138,6 +139,15 @@ public class MainActivity extends Activity {
     public void openExercise() {
         if (overlayPage != null) return;
         overlayPage = new ExercisePage(this);
+        pageHost.addView(overlayPage, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        overlayPage.onShow();
+    }
+
+    /** 打开健康智能体覆盖页 (与运动页同一覆盖层机制, 返回键/关闭逻辑通用) */
+    public void openAgent() {
+        if (overlayPage != null) return;
+        overlayPage = new AgentPage(this);
         pageHost.addView(overlayPage, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         overlayPage.onShow();

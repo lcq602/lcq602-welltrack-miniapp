@@ -12,6 +12,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -690,6 +691,10 @@ public class IndexPage extends BasePage {
             row.addView(texts, Ui.weight1());
             card.addView(row, Ui.matchWrap(i == 0 ? 12 : 10, ctx()));
         }
+        // 卡片底部: 健康智能体入口 (带着本页数据上下文去聊天)
+        Button agentBtn = Ui.ghostButton(ctx(), "💬 问健康智能体");
+        agentBtn.setOnClickListener(v -> activity().openAgent());
+        card.addView(agentBtn, Ui.matchWrap(14, ctx()));
         return card;
     }
 
