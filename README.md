@@ -8,6 +8,12 @@
 
 后端启动与接口文档见 [backend/README.md](backend/README.md) 和 [backend/API.md](backend/API.md)。
 
+## 安卓 App (原生版)
+
+`android/` 是由小程序同构转化的原生 Android 应用 (非套壳): 页面结构、文案与主题与小程序一致，
+共用同一 FastAPI 后端。构建方式见 [android/README.md](android/README.md)，
+GitHub Actions 也会自动构建 APK 并提供下载 (构建产物 `welltrack-apk`)。
+
 ## 微信开发者工具
 
 1. 可直接导入项目根目录（根配置会把源码指向 `miniprogram/`），或直接导入 `miniprogram/`；使用无 AppID/游客模式即可。

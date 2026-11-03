@@ -1,0 +1,23 @@
+plugins { id "com.android.application" }
+
+android {
+    namespace "art.qelora.welltrack"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "art.qelora.welltrack"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+    buildTypes {
+        release { minifyEnabled false }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+// 无第三方依赖: 仅用 Android 框架 API, 与 scripts/build-apk.sh 的离线构建保持一致
+dependencies {}

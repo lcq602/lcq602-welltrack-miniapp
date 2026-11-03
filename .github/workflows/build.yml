@@ -68,3 +68,25 @@ jobs:
         with:
           files: dist/*.zip
           generate_release_notes: true
+
+  android-apk:
+    name: 安卓 APK 构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: 生成 CI 临时签名并构建 APK
+        env:
+          WELLTRACK_KEYSTORE: ${{ runner.temp }}/welltrack.keystore
+          WELLTRACK_KS_PASS: ci-temp-password
+          ANDROID_SDK: ${{ env.ANDROID_HOME }}
+        run: bash scripts/build-apk.sh dist/welltrack.apk
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: welltrack-apk
+          path: dist/welltrack.apk
+          retention-days: 30

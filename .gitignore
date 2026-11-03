@@ -11,3 +11,8 @@ backend/data/
 dist/
 miniprogram/project.private.config.json
 project.private.config.json
+.gradle/
+android/app/build/
+android/build/
+local.properties
+*.keystore

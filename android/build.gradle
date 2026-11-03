@@ -1,0 +1,6 @@
+// 顶层构建文件 (标准 Android Gradle 工程结构)
+buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies { classpath "com.android.tools.build:gradle:8.5.2" }
+}
+allprojects { repositories { google(); mavenCentral() } }
