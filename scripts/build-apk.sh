@@ -14,7 +14,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export JAVA_HOME="${JAVA_HOME:-$HOME/tools/jdk-17.0.21+9}"
 export PATH="$JAVA_HOME/bin:$PATH"
-SDK="${ANDROID_SDK:-$HOME/tools/android-sdk}"
+SDK="${ANDROID_SDK:-${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/tools/android-sdk}}}"
 BT="$SDK/build-tools/34.0.0"
 JAR="$SDK/platforms/android-34/android.jar"
 MAIN="$ROOT/android/app/src/main"
