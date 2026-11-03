@@ -3,6 +3,7 @@ package art.qelora.welltrack.pages;
 import android.app.DatePickerDialog;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Outline;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
@@ -12,9 +13,11 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -35,15 +38,16 @@ import java.util.Map;
 import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.Insights;
+import art.qelora.welltrack.health.PlanStore;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 import art.qelora.welltrack.ui.VitalityRings;
 
 /**
- * 首页 v2 (对应小程序 pages/index, 视觉与功能重构版):
- * 产品主线 = 小米运动健康数据: 活力三环 + 今日健康分 + 消耗达标 + 健康洞察与锻炼建议 + 每日体重。
- * 结构: 问候 → 主视觉横幅 → 活力卡 (三环/健康分/达标文案) → 今日指标 2×2 → 健康洞察 →
- *       体重卡 → 今日待办 → 7 天体重波动。未连接小米时活力区换成连接引导卡。
+ * 首页 v2.2 (对应小程序 pages/index, 深色荧光绿风格):
+ * 结构: 问候头 → 今日训练大卡 (AI 计划) → 三瓷砖 (饮食/有氧/身体数据) → 本周计划周条 →
+ *       活力卡 (三环/健康分/达标文案) → 今日指标 2×2 → 健康洞察 → 体重卡 → 今日待办 → 7 天体重波动。
+ * 未连接小米时活力区换成连接引导卡。计划数据经 PlanStore (与计划页共用缓存)。
  * 数据: GET /api/v1/dashboard; 建档: POST /api/v1/profile; 同步: POST /api/v1/integrations/mihealth/sync。
  */
 public class IndexPage extends BasePage {
@@ -86,6 +90,12 @@ public class IndexPage extends BasePage {
     private final Insights.Week weekStats = new Insights.Week();
     private String todayPlan = null;
     private boolean miConnected = false;
+    private final Map<String, JSONObject> recordByDateMap = new HashMap<>();
+
+    // v2.2 本周计划 (PlanStore): 训练大卡 / 三瓷砖 / 周条 / 今日摘要共用
+    private JSONObject homePlan;         // plan 对象本身, 未就绪为 null
+    private String homePlanSig = "";     // week_start+今日focus+source 签名, 防重复渲染
+    private boolean homePlanRequested = false;
 
     // 建档表单状态
     private String fHeight = "", fCurrent = "", fTarget = "", fStartDate = "", fTargetDate = "";
@@ -134,6 +144,7 @@ public class IndexPage extends BasePage {
                 configured = res.optBoolean("configured", false);
                 compute();
                 loading = false;
+                homePlanRequested = false; // 计划走 PlanStore 缓存复检, 签名不变则不重复渲染
                 render();
             }
 
@@ -164,6 +175,8 @@ public class IndexPage extends BasePage {
                 if (w != null) values.add(w);
             }
         }
+        recordByDateMap.clear();
+        recordByDateMap.putAll(recordMap);
         double min = 0, max = 1;
         if (!values.isEmpty()) {
             min = Double.MAX_VALUE; max = -Double.MAX_VALUE;
@@ -368,7 +381,7 @@ public class IndexPage extends BasePage {
         mark.setGravity(Gravity.CENTER);
         GradientDrawable circle = new GradientDrawable();
         circle.setShape(GradientDrawable.OVAL);
-        circle.setColor(Color.parseColor("#fef2f2"));
+        circle.setColor(Ui.RED_SOFT);
         mark.setBackground(circle);
         int sz = Ui.dp(ctx(), 56);
         box.addView(mark, new LinearLayout.LayoutParams(sz, sz));
@@ -386,33 +399,35 @@ public class IndexPage extends BasePage {
         body.addView(box);
     }
 
+    /* 问候头 (v2.2 参考风): 小字日期行 + 大字时段问候 + 右侧圆形头像 (去我的页) */
     private void renderHead() {
         LinearLayout head = Ui.row(ctx());
         LinearLayout left = Ui.column(ctx());
-        LinearLayout eyebrow = Ui.row(ctx());
-        View dot = new View(ctx());
-        GradientDrawable d = new GradientDrawable();
-        d.setShape(GradientDrawable.OVAL);
-        d.setColor(Ui.PRIMARY);
-        dot.setBackground(d);
-        eyebrow.addView(dot, new LinearLayout.LayoutParams(Ui.dp(ctx(), 7), Ui.dp(ctx(), 7)));
-        TextView brand = Ui.text(ctx(), "  WELLTRACK · 每一点都算数", 11, Ui.PRIMARY, true);
-        eyebrow.addView(brand);
-        left.addView(eyebrow);
-        TextView title = Ui.title(ctx(), configured ? "早上好，今天也慢慢来" : "建立我的健康起点");
-        left.addView(title, Ui.matchWrap(6, ctx()));
+        Calendar now = Calendar.getInstance();
+        String dateLine = "轻衡健康 · " + (now.get(Calendar.MONTH) + 1) + "月"
+                + now.get(Calendar.DAY_OF_MONTH) + "日 周" + WEEKDAYS[now.get(Calendar.DAY_OF_WEEK) - 1];
+        left.addView(Ui.text(ctx(), dateLine, 12, Ui.SLATE, false));
+        String greet;
+        if (!configured) {
+            greet = "建立我的健康起点";
+        } else {
+            int h = now.get(Calendar.HOUR_OF_DAY);
+            greet = h < 6 ? "夜深了" : h < 12 ? "早上好" : h < 13 ? "中午好" : h < 18 ? "下午好" : "晚上好";
+        }
+        TextView title = Ui.text(ctx(), greet, 26, Ui.INK, true);
+        left.addView(title, Ui.matchWrap(4, ctx()));
         head.addView(left, Ui.weight1());
         if (configured) {
-            LinearLayout pillBox = Ui.column(ctx());
-            pillBox.setGravity(Gravity.CENTER);
-            pillBox.setBackground(Ui.roundRect(Ui.SOFT, 12, ctx()));
-            int p = Ui.dp(ctx(), 8);
-            pillBox.setPadding(p, Ui.dp(ctx(), 6), p, Ui.dp(ctx(), 6));
-            pillBox.addView(Ui.text(ctx(), todayFullLabel, 11, Ui.INK, false));
-            TextView badge = Ui.text(ctx(), "已同步", 10, Ui.PRIMARY, true);
-            badge.setGravity(Gravity.CENTER);
-            pillBox.addView(badge);
-            head.addView(pillBox);
+            TextView avatar = Ui.text(ctx(), "👤", 17, Ui.INK, false);
+            avatar.setGravity(Gravity.CENTER);
+            GradientDrawable avBg = new GradientDrawable();
+            avBg.setShape(GradientDrawable.OVAL);
+            avBg.setColor(Ui.GREEN_SOFT);
+            avBg.setStroke(1, Ui.BORDER);
+            avatar.setBackground(avBg);
+            int sz = Ui.dp(ctx(), 42);
+            avatar.setOnClickListener(v -> activity().switchTab(4));
+            head.addView(avatar, new LinearLayout.LayoutParams(sz, sz));
         }
         body.addView(head);
     }
@@ -510,8 +525,13 @@ public class IndexPage extends BasePage {
     /* ---- 已配置: 仪表盘 v2 ---- */
 
     private void renderDashboard() {
-        // 2) 主视觉横幅 (纯图, 不叠字)
-        body.addView(Ui.bannerImage(ctx(), R.drawable.hero_home, 150, 24), Ui.matchWrap(14, ctx()));
+        requestHomePlan();
+        // 2) 今日训练大卡 (AI 计划驱动, 参考图照片大卡)
+        body.addView(renderTrainingCard(), Ui.matchWrap(14, ctx()));
+        // 3) 三瓷砖: 饮食记录 / 有氧运动 / 身体数据
+        body.addView(renderTopTiles(), Ui.matchWrap(12, ctx()));
+        // 4) 本周计划: 周条 + 今日摘要
+        body.addView(renderWeekStrip(), Ui.matchWrap(18, ctx()));
 
         if (miConnected) {
             // 3) 活力卡
@@ -535,6 +555,218 @@ public class IndexPage extends BasePage {
 
         TextView dis = Ui.text(ctx(), "BMI 与数据记录用于健康自我管理，不构成医疗诊断或特定减重速度承诺。", 11, Ui.MUTED, false);
         body.addView(dis, Ui.matchWrap(14, ctx()));
+    }
+
+    /* ---------------- v2.2: AI 计划驱动的顶部区块 ---------------- */
+
+    /* 静默加载本周计划 (PlanStore 有缓存与并发合并); 内容变化时才重渲染一次 */
+    private void requestHomePlan() {
+        if (homePlanRequested) return;
+        homePlanRequested = true;
+        PlanStore.get(ctx(), false, new PlanStore.Listener() {
+            @Override public void onPlan(JSONObject result) {
+                JSONObject plan = result.optJSONObject("plan");
+                if (plan == null) return;
+                JSONObject today = PlanStore.dayAt(plan, PlanStore.todayIndex());
+                String sig = result.optString("week_start", "") + "|"
+                        + (today != null ? today.optString("focus", "") : "") + "|"
+                        + result.optString("source", "");
+                homePlan = plan;
+                if (!sig.equals(homePlanSig)) {
+                    homePlanSig = sig;
+                    if (data != null && configured) render();
+                }
+            }
+
+            @Override public void onError(String message) {
+                // 训练卡/周条用兜底文案即可, 不打扰用户
+            }
+        });
+    }
+
+    /* 今日训练大卡: 训练照片铺满 + 深色渐变罩 + 今日计划标题 + 荧光绿开始按钮 */
+    private View renderTrainingCard() {
+        Context c = ctx();
+        JSONObject todayObj = homePlan != null ? PlanStore.dayAt(homePlan, PlanStore.todayIndex()) : null;
+        String focus = todayObj != null ? todayObj.optString("focus", "") : "";
+        JSONArray actions = todayObj != null ? todayObj.optJSONArray("actions") : null;
+        int actionCount = actions != null ? actions.length() : 0;
+        String cardTitle = !focus.isEmpty() ? focus : "让 AI 安排今天";
+        String cardSub = todayObj != null
+                ? focus + " · " + actionCount + " 个动作"
+                : "基于你的小米数据智能生成";
+
+        FrameLayout box = new FrameLayout(c);
+        box.setClipToOutline(true);
+        final float radius = Ui.dp(c, 24);
+        box.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radius);
+            }
+        });
+        box.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(c, 218)));
+
+        ImageView img = new ImageView(c);
+        img.setImageResource(R.drawable.hero_training);
+        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        box.addView(img, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        View shade = new View(c);
+        GradientDrawable gd = new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
+                new int[]{Color.parseColor("#e60b0e0b"), Color.parseColor("#590b0e0b"),
+                        Color.parseColor("#000b0e0b")});
+        shade.setBackground(gd);
+        box.addView(shade, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        LinearLayout overlay = Ui.column(c);
+        int pad = Ui.dp(c, 16);
+        overlay.setPadding(pad, pad, pad, pad);
+        LinearLayout top = Ui.row(c);
+        top.addView(Ui.text(c, "今天的训练", 13, Ui.LIME, true), Ui.weight1());
+        TextView adjust = Ui.text(c, "调整计划 ›", 12, Color.WHITE, false);
+        adjust.setBackground(Ui.roundRect(Color.parseColor("#59000000"), 999, c));
+        int ah = Ui.dp(c, 10), av = Ui.dp(c, 5);
+        adjust.setPadding(ah, av, ah, av);
+        adjust.setOnClickListener(v -> activity().switchTab(1));
+        top.addView(adjust);
+        overlay.addView(top);
+        overlay.addView(new View(c), new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        overlay.addView(Ui.text(c, cardTitle, 25, Color.WHITE, true));
+        overlay.addView(Ui.text(c, cardSub, 13, Color.parseColor("#c9d2c4"), false), Ui.matchWrap(4, c));
+        Button start = new Button(c);
+        start.setText("开始训练  →");
+        start.setTextSize(16);
+        start.setTextColor(Ui.ON_LIME);
+        start.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        start.setBackground(Ui.roundRect(Ui.LIME, 16, c));
+        start.setAllCaps(false);
+        start.setOnClickListener(v -> activity().openExercise());
+        LinearLayout.LayoutParams blp = Ui.matchWrap(14, c);
+        blp.height = Ui.dp(c, 50);
+        overlay.addView(start, blp);
+        box.addView(overlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        return box;
+    }
+
+    /* 三瓷砖: 饮食记录 (今日饮水) / 有氧运动 (今日运动分钟) / 身体数据 (最新体重, 点击去记录页) */
+    private LinearLayout renderTopTiles() {
+        Context c = ctx();
+        LinearLayout row = Ui.row(c);
+        row.setGravity(Gravity.TOP);
+        JSONObject todayRec = recordByDateMap.get(todayString());
+        Double water = todayRec != null ? num(todayRec, "water_ml") : null;
+        row.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "🍽️", "饮食记录",
+                water != null ? fmt(water) : "—",
+                water != null ? "今日饮水 · ml" : "今日未记录", -1), tile3Lp(true, false));
+        Double wm = todayRec != null ? num(todayRec, "workout_minutes") : null;
+        int mins = wm != null ? (int) Math.round(wm) : todayDay.workoutMinutes;
+        row.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "🏃", "有氧运动",
+                String.valueOf(mins), "今日运动 · 分钟", -1), tile3Lp(false, false));
+        LinearLayout bodyTile = Ui.metricTile(c, Ui.LIME, Ui.SOFT, "⚖️", "身体数据",
+                fmt(num(data, "current_weight")), "kg · 记录今天", -1);
+        bodyTile.setOnClickListener(v -> activity().switchTab(2));
+        row.addView(bodyTile, tile3Lp(false, true));
+        return row;
+    }
+
+    private LinearLayout.LayoutParams tile3Lp(boolean first, boolean last) {
+        LinearLayout.LayoutParams lp = Ui.weight1();
+        if (!first) lp.leftMargin = Ui.dp(ctx(), 4);
+        if (!last) lp.rightMargin = Ui.dp(ctx(), 4);
+        return lp;
+    }
+
+    /* 本周计划: 章节头 + 周条 (今天荧光绿方块, 活动日小圆点) + 今日摘要行 */
+    private LinearLayout renderWeekStrip() {
+        Context c = ctx();
+        LinearLayout col = Ui.column(c);
+        col.addView(Ui.sectionHeader(c, "本周计划", "历史记录 ›", v -> activity().switchTab(3)));
+        String[] names = {"一", "二", "三", "四", "五", "六", "日"};
+        List<String> dates = PlanStore.weekDates();
+        int todayIdx = PlanStore.todayIndex();
+
+        LinearLayout stripCard = Ui.card(c);
+        LinearLayout strip = Ui.row(c);
+        for (int i = 0; i < 7; i++) {
+            String ds = dates.get(i);
+            boolean isToday = i == todayIdx;
+            LinearLayout cellCol = Ui.column(c);
+            cellCol.setGravity(Gravity.CENTER_HORIZONTAL);
+            TextView wd = Ui.text(c, names[i], 11, isToday ? Ui.LIME : Ui.MUTED, isToday);
+            wd.setGravity(Gravity.CENTER);
+            cellCol.addView(wd);
+            TextView num = Ui.text(c, String.valueOf(parseCal(ds).get(Calendar.DAY_OF_MONTH)),
+                    15, isToday ? Ui.ON_LIME : Ui.INK, true);
+            num.setGravity(Gravity.CENTER);
+            if (isToday) num.setBackground(Ui.roundRect(Ui.LIME, 12, c));
+            LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(Ui.dp(c, 36), Ui.dp(c, 36));
+            nlp.topMargin = Ui.dp(c, 5);
+            cellCol.addView(num, nlp);
+            View dot = new View(c);
+            if (weekDayHasActivity(ds, i)) {
+                GradientDrawable dd = new GradientDrawable();
+                dd.setShape(GradientDrawable.OVAL);
+                dd.setColor(Ui.LIME);
+                dot.setBackground(dd);
+            }
+            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(Ui.dp(c, 5), Ui.dp(c, 5));
+            dlp.topMargin = Ui.dp(c, 5);
+            cellCol.addView(dot, dlp);
+            strip.addView(cellCol, Ui.weight1());
+        }
+        stripCard.addView(strip);
+        col.addView(stripCard, Ui.matchWrap(10, c));
+
+        JSONObject todayObj = homePlan != null ? PlanStore.dayAt(homePlan, todayIdx) : null;
+        LinearLayout summary = Ui.row(c);
+        summary.setBackground(Ui.roundRect(Ui.SOFT, 12, c));
+        int sp = Ui.dp(c, 12);
+        summary.setPadding(sp, Ui.dp(c, 10), sp, Ui.dp(c, 10));
+        String sumText;
+        if (todayObj != null) {
+            JSONArray acts = todayObj.optJSONArray("actions");
+            int n = acts != null ? acts.length() : 0;
+            sumText = "今日 · " + todayObj.optString("focus", "日常活动") + " · " + n
+                    + " 个动作 · 目标 " + todayObj.optInt("steps_target", 0) + " 步";
+        } else {
+            sumText = "让 AI 为你安排本周计划";
+        }
+        summary.addView(Ui.text(c, sumText, 13, Ui.INK, false), Ui.weight1());
+        summary.addView(Ui.text(c, "计划 ›", 12, Ui.LIME, true));
+        summary.setOnClickListener(v -> activity().switchTab(1));
+        col.addView(summary, Ui.matchWrap(10, c));
+        return col;
+    }
+
+    /* 周条小圆点: 当天有运动安排 (计划非休息日) 或已实际运动 */
+    private boolean weekDayHasActivity(String dateStr, int idx) {
+        JSONObject rec = recordByDateMap.get(dateStr);
+        if (rec != null) {
+            Double wm = num(rec, "workout_minutes");
+            if (wm != null && wm > 0) return true;
+        }
+        JSONObject d = homePlan != null ? PlanStore.dayAt(homePlan, idx) : null;
+        if (d != null) {
+            String focus = d.optString("focus", "");
+            JSONArray acts = d.optJSONArray("actions");
+            if (!focus.contains("休息") && acts != null && acts.length() > 0) return true;
+        }
+        return false;
+    }
+
+    private static Calendar parseCal(String ds) {
+        Calendar cal = Calendar.getInstance();
+        try {
+            cal.set(Calendar.YEAR, Integer.parseInt(ds.substring(0, 4)));
+            cal.set(Calendar.MONTH, Integer.parseInt(ds.substring(5, 7)) - 1);
+            cal.set(Calendar.DAY_OF_MONTH, Integer.parseInt(ds.substring(8, 10)));
+        } catch (Exception ignored) {}
+        return cal;
     }
 
     /* 活力卡: 三环 + 今日健康分 + 三项图例 + 消耗达标横条; 右上角保留小米同步按钮 */
@@ -571,7 +803,7 @@ public class IndexPage extends BasePage {
         scoreRow.addView(Ui.text(ctx(), String.valueOf(score), 34, Ui.INK, true));
         TextView scoreUnit = Ui.text(ctx(), " 分", 13, Ui.SLATE, false);
         scoreRow.addView(scoreUnit);
-        TextView labelChip = Ui.chip(ctx(), Insights.scoreLabel(score), Ui.DEEP, Ui.GREEN_SOFT);
+        TextView labelChip = Ui.chip(ctx(), Insights.scoreLabel(score), Ui.PRIMARY_DARK, Ui.GREEN_SOFT);
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         clp.leftMargin = Ui.dp(ctx(), 8);
@@ -592,7 +824,7 @@ public class IndexPage extends BasePage {
         int p = Ui.dp(ctx(), 10);
         hint.setPadding(p, p, p, p);
         TextView ht = Ui.text(ctx(), (reached ? "🔥 " : "🎯 ") + Insights.calorieHint(todayDay.calories),
-                13, reached ? Ui.DEEP : Color.parseColor("#9a3412"), true);
+                13, reached ? Ui.PRIMARY_DARK : Ui.CAL_TEXT, true);
         hint.addView(ht, Ui.weight1());
         card.addView(hint, Ui.matchWrap(14, ctx()));
         return card;
@@ -710,7 +942,7 @@ public class IndexPage extends BasePage {
         top.addView(left, Ui.weight1());
         TextView goalPill = pill("目标 " + fmt(num(data, "target_weight")) + " kg"
                 + (remainingWeight.isEmpty() ? "" : " · " + remainingWeight),
-                Color.parseColor("#d1fae5"), Ui.PRIMARY);
+                Ui.GREEN_SOFT, Ui.PRIMARY_DARK);
         top.addView(goalPill);
         card.addView(top);
 
@@ -718,7 +950,7 @@ public class IndexPage extends BasePage {
         wRow.addView(Ui.text(ctx(), fmt(num(data, "current_weight")), 34, Ui.INK, true));
         wRow.addView(Ui.text(ctx(), " kg", 16, Ui.SLATE, false));
         if (!diffLabel.isEmpty()) {
-            TextView dp2 = pill(diffLabel, Ui.BLUE_SOFT, Color.parseColor("#2563eb"));
+            TextView dp2 = pill(diffLabel, Ui.BLUE_SOFT, Color.parseColor("#60a5fa"));
             LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             dl.leftMargin = Ui.dp(ctx(), 8);
@@ -761,7 +993,7 @@ public class IndexPage extends BasePage {
         titles.addView(Ui.sectionTitle(ctx(), "今天，照顾好自己"));
         titles.addView(Ui.text(ctx(), "小行动比完美计划更重要", 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
         head.addView(titles, Ui.weight1());
-        head.addView(pill(todos.size() + " 项行动", Color.parseColor("#d1fae5"), Ui.PRIMARY));
+        head.addView(pill(todos.size() + " 项行动", Ui.GREEN_SOFT, Ui.PRIMARY_DARK));
         card.addView(head);
         for (String todo : todos) {
             LinearLayout row = Ui.row(ctx());
@@ -769,7 +1001,7 @@ public class IndexPage extends BasePage {
             check.setGravity(Gravity.CENTER);
             GradientDrawable circ = new GradientDrawable();
             circ.setShape(GradientDrawable.OVAL);
-            circ.setColor(Color.parseColor("#d1fae5"));
+            circ.setColor(Ui.GREEN_SOFT);
             check.setBackground(circ);
             int sz = Ui.dp(ctx(), 22);
             LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(sz, sz);
@@ -884,9 +1116,9 @@ public class IndexPage extends BasePage {
     }
 
     private TextView goalChip(String label, boolean active) {
-        TextView chip = Ui.text(ctx(), label, 13, active ? Color.WHITE : Ui.SLATE, active);
+        TextView chip = Ui.text(ctx(), label, 13, active ? Ui.ON_LIME : Ui.SLATE, active);
         chip.setGravity(Gravity.CENTER);
-        chip.setBackground(Ui.roundRect(active ? Ui.PRIMARY : Ui.SOFT, 10, ctx()));
+        chip.setBackground(Ui.roundRect(active ? Ui.LIME : Ui.SOFT, 10, ctx()));
         int v = Ui.dp(ctx(), 9);
         chip.setPadding(0, v, 0, v);
         return chip;
@@ -902,19 +1134,19 @@ public class IndexPage extends BasePage {
 
     private int pillBg(String kind) {
         switch (kind) {
-            case "blue": return Color.parseColor("#dbeafe");
-            case "amber": return Color.parseColor("#fef3c7");
-            case "purple": return Color.parseColor("#ede9fe");
-            default: return Color.parseColor("#d1fae5");
+            case "blue": return Ui.BLUE_SOFT;
+            case "amber": return Ui.AMBER_SOFT_DARK;
+            case "purple": return Ui.SLEEP_SOFT;
+            default: return Ui.GREEN_SOFT;
         }
     }
 
     private int pillFg(String kind) {
         switch (kind) {
-            case "blue": return Color.parseColor("#2563eb");
-            case "amber": return Color.parseColor("#d97706");
-            case "purple": return Color.parseColor("#7c3aed");
-            default: return Ui.PRIMARY;
+            case "blue": return Color.parseColor("#60a5fa");
+            case "amber": return Ui.AMBER_TEXT;
+            case "purple": return Ui.SLEEP;
+            default: return Ui.PRIMARY_DARK;
         }
     }
 

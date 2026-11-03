@@ -44,7 +44,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         Window window = getWindow();
         window.setStatusBarColor(Ui.BG);
-        window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+        // 深色主题: 状态栏用浅色图标 (不设 LIGHT_STATUS_BAR)
+        window.getDecorView().setSystemUiVisibility(0);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -74,7 +75,9 @@ public class MainActivity extends Activity {
         int m = Ui.dp(this, 12);
         LinearLayout dock = new LinearLayout(this);
         dock.setOrientation(LinearLayout.HORIZONTAL);
-        dock.setBackground(Ui.roundRect(Color.WHITE, 28, this));
+        android.graphics.drawable.GradientDrawable dockBg = Ui.roundRect(Color.parseColor("#10130f"), 28, this);
+        dockBg.setStroke(1, Ui.BORDER);
+        dock.setBackground(dockBg);
         dock.setElevation(Ui.dp(this, 6));
         int pv = Ui.dp(this, 8);
         dock.setPadding(pv, pv, pv, pv);
@@ -100,7 +103,7 @@ public class MainActivity extends Activity {
             icon.setImageResource(tabIcons[i]);
             icon.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(this, 24), Ui.dp(this, 24)));
             pill.addView(icon);
-            TextView label = Ui.text(this, tabLabels[i], 11, Ui.SLATE, false);
+            TextView label = Ui.text(this, tabLabels[i], 11, Ui.MUTED, false);
             label.setGravity(Gravity.CENTER);
             item.addView(pill);
             item.addView(label);
@@ -128,9 +131,9 @@ public class MainActivity extends Activity {
         for (int i = 0; i < 5; i++) {
             boolean active = i == idx;
             LinearLayout pill = (LinearLayout) tabItems[i].getTag();
-            pill.setBackground(active ? Ui.roundRect(Color.parseColor("#d1fae5"), 18, this) : null);
-            tabIconViews[i].setColorFilter(active ? Ui.PRIMARY : Ui.SLATE);
-            tabLabelViews[i].setTextColor(active ? Ui.PRIMARY : Ui.SLATE);
+            pill.setBackground(active ? Ui.roundRect(Ui.GREEN_SOFT, 18, this) : null);
+            tabIconViews[i].setColorFilter(active ? Ui.LIME : Ui.MUTED);
+            tabLabelViews[i].setTextColor(active ? Ui.LIME : Ui.MUTED);
             tabLabelViews[i].setTypeface(null, active ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
         }
     }

@@ -1,6 +1,5 @@
 package art.qelora.welltrack.pages;
 
-import android.app.AlertDialog;
 import android.app.DatePickerDialog;
 import android.content.Context;
 import android.graphics.Color;
@@ -15,66 +14,58 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.Calendar;
+import java.util.List;
+import java.util.Locale;
 
 import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
+import art.qelora.welltrack.health.PlanStore;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
 /**
- * 计划页: 与小程序 pages/plan 同构。
- * GET /api/v1/profile 读取最新资料版本; 未配置时引导去首页;
- * 已配置时可改管理方向、当前/目标体重、开始/目标日期与每周安排,
- * POST /api/v1/profile 追加保存为新版本。
+ * 计划页 v2.2: AI 推荐计划 (深色荧光绿风)。
+ * 计划由 PlanStore 统一供给 (Worker AI 按档案 + 近 7 天小米数据生成, 本地规则兜底):
+ * 本周目标卡 → 今日安排 (目标 vs 实际) → 本周安排 (含已过去日期的达标状态) → 教练建议;
+ * 页面底部保留精简的「调整目标」表单 (方向/体重/日期), 保存时档案原 weekly_plan 不动。
+ * 未配置档案时沿用原空状态引导去首页建档。
  */
 public class PlanPage extends BasePage {
-    private static final String[] WEEK_OPTIONS = {"有氧运动", "力量训练", "散步", "休息", "拉伸", "自由活动"};
     private static final String[] GOAL_OPTIONS = {"减重", "减脂", "维持", "健康习惯"};
     private static final String[] GOAL_VALUES = {"weight_loss", "fat_loss", "maintenance", "healthy_habits"};
     private static final String[] DAY_NAMES = {"周一", "周二", "周三", "周四", "周五", "周六", "周日"};
-    private static final String[] DAY_KEYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"};
+    private static final String[] DAY_SHORT = {"一", "二", "三", "四", "五", "六", "日"};
 
     private LinearLayout body;
-    private JSONObject profile;          // null = 未配置
-    private boolean loading = true;
+    private JSONObject profile;              // null = 未配置
+    private boolean profileLoaded = false;
+    private JSONObject dashboard;            // 今日实际 (mihealth.today)
+    private JSONObject weekAnalytics;        // 本周逐日实际 (达标状态)
+    private JSONObject planResult;           // PlanStore 结果 {plan, week_start, source}
+    private boolean generating = false;
     private boolean saving = false;
 
-    // 表单状态 (已配置时有效)
+    // 调整目标表单状态 (首次拿到档案时初始化, 之后以字段为准避免重渲染丢编辑)
+    private boolean formInit = false;
     private int goalIndex = 0;
     private String startDate = "";
     private String targetDate = "";
-    private final String[] dayValues = new String[7];
+    private String formCur = "";
+    private String formTar = "";
     private EditText curWeightInput;
     private EditText tarWeightInput;
     private TextView deltaView;
     private TextView startDateView;
     private TextView targetDateView;
     private final TextView[] goalChips = new TextView[4];
-    private final TextView[] dayValueViews = new TextView[7];
-    private final TextView[] dayTagViews = new TextView[7];
     private Button saveButton;
+    private Button regenButton;
 
     public PlanPage(Context ctx) { super(ctx); }
-
-    private static String activityTag(String activity) {
-        if ("力量训练".equals(activity)) return "中高强度";
-        if ("有氧运动".equals(activity)) return "心肺激活";
-        if ("散步".equals(activity)) return "轻松适度";
-        if ("休息".equals(activity)) return "恢复日";
-        if ("拉伸".equals(activity)) return "柔韧放松";
-        if ("自由活动".equals(activity)) return "生活活动";
-        return "日常活动";
-    }
-
-    private static String[] templateFor(String goal) {
-        if ("fat_loss".equals(goal)) return new String[]{"力量训练", "有氧运动", "休息", "力量训练", "散步", "有氧运动", "休息"};
-        if ("maintenance".equals(goal)) return new String[]{"散步", "力量训练", "休息", "有氧运动", "休息", "自由活动", "休息"};
-        if ("healthy_habits".equals(goal)) return new String[]{"散步", "拉伸", "休息", "有氧运动", "拉伸", "自由活动", "休息"};
-        return new String[]{"散步", "休息", "有氧运动", "休息", "散步", "自由活动", "休息"}; // weight_loss
-    }
 
     static String fmtNum(JSONObject o, String key) {
         if (o == null || o.isNull(key)) return "";
@@ -85,30 +76,17 @@ public class PlanPage extends BasePage {
 
     static String fmtDouble(double d) {
         if (d == Math.floor(d) && !Double.isInfinite(d)) return String.valueOf((long) d);
-        String s = String.valueOf(d);
-        return s;
+        return String.valueOf(d);
     }
 
     @Override
     protected void build() {
         Context c = ctx();
-        // 页头
-        content.addView(Ui.label(c, "● A PLAN THAT FITS YOU"));
-        TextView title = Ui.title(c, "阶段计划");
+        content.addView(Ui.label(c, "● AI PLAN FOR YOU"));
+        TextView title = Ui.title(c, "本周计划");
         title.setTextSize(24);
         content.addView(title, Ui.matchWrap(2, c));
-
-        // 顶部主视觉横幅 (瑜伽插画)
-        content.addView(Ui.bannerImage(c, R.drawable.img_plan, 130, 24), Ui.matchWrap(12, c));
-
-        // 温和心念卡片
-        LinearLayout quote = Ui.card(c);
-        quote.setBackground(roundStroke(Color.parseColor("#f0fdf4"), 16, Color.parseColor("#c9ecda")));
-        TextView qt = Ui.text(c, "✳  稳定，比赶进度更重要", 15, Ui.INK, true);
-        quote.addView(qt);
-        quote.addView(Ui.text(c, "让计划配合你的生活，而不是反过来。持续的低摩擦行动，胜过短暂的完美主义。",
-                12.5f, Ui.SLATE, false), Ui.matchWrap(4, c));
-        content.addView(quote, Ui.matchWrap(12, c));
+        content.addView(Ui.bannerImage(c, R.drawable.hero_training, 130, 24), Ui.matchWrap(12, c));
 
         body = Ui.column(c);
         content.addView(body, Ui.matchWrap(12, c));
@@ -132,16 +110,17 @@ public class PlanPage extends BasePage {
         body.removeAllViews();
         LinearLayout card = Ui.card(ctx());
         card.setGravity(Gravity.CENTER);
-        card.addView(Ui.text(ctx(), "正在读取你的专属计划…", 14, Ui.SLATE, false));
+        card.addView(Ui.text(ctx(), "AI 正在根据你的数据制定本周计划…", 14, Ui.SLATE, false));
         body.addView(card);
     }
 
+    /* ---------------- 数据 ---------------- */
+
     private void load() {
-        loading = true;
-        // /profile 未配置时返回 JSON null, 用文本接口自行解析
+        // 档案: 未配置时返回 JSON null, 用文本接口自行解析
         api().requestText("/api/v1/profile", new ApiClient.RawCallback() {
             @Override public void onOk(String text, int status) {
-                loading = false;
+                profileLoaded = true;
                 try {
                     if (text == null || text.trim().equals("null") || text.trim().isEmpty()) {
                         profile = null;
@@ -151,37 +130,83 @@ public class PlanPage extends BasePage {
                 } catch (Exception e) {
                     profile = null;
                 }
+                initFormFromProfile();
                 renderBody();
             }
             @Override public void onError(String message) {
-                loading = false;
+                profileLoaded = true;
                 toast(message == null || message.isEmpty() ? "加载失败" : message);
+                renderBody();
+            }
+        });
+        api().request("/api/v1/dashboard", "GET", null, new ApiClient.Callback() {
+            @Override public void onOk(JSONObject data, int status) {
+                dashboard = data;
+                renderBody();
+            }
+            @Override public void onError(String message) { /* 今日实际缺省即可 */ }
+        });
+        api().request("/api/v1/analytics?period=week", "GET", null, new ApiClient.Callback() {
+            @Override public void onOk(JSONObject data, int status) {
+                weekAnalytics = data;
+                renderBody();
+            }
+            @Override public void onError(String message) { /* 达标状态缺省即可 */ }
+        });
+        requestPlan(false);
+    }
+
+    private void requestPlan(boolean force) {
+        generating = true;
+        PlanStore.get(ctx(), force, new PlanStore.Listener() {
+            @Override public void onPlan(JSONObject result) {
+                generating = false;
+                planResult = result;
+                renderBody();
+            }
+            @Override public void onError(String message) {
+                generating = false;
+                toast(message == null || message.isEmpty() ? "计划生成失败" : message);
                 renderBody();
             }
         });
     }
 
+    private void initFormFromProfile() {
+        if (formInit || profile == null) return;
+        formInit = true;
+        goalIndex = indexOf(GOAL_VALUES, profile.optString("goal", "weight_loss"));
+        if (goalIndex < 0) goalIndex = 0;
+        startDate = profile.optString("start_date", "");
+        targetDate = profile.isNull("target_date") ? "" : profile.optString("target_date", "");
+        formCur = fmtNum(profile, "current_weight");
+        formTar = fmtNum(profile, "target_weight");
+    }
+
+    /* ---------------- 渲染 ---------------- */
+
     private void renderBody() {
         if (body == null) return;
+        if (!profileLoaded) { showLoading(); return; }
         body.removeAllViews();
         if (profile == null) {
-            if (loading) { showLoading(); return; }
             renderEmpty();
             return;
         }
-        renderConfigured();
+        renderPlanSections();
+        renderGoalForm();
     }
 
     private void renderEmpty() {
         Context c = ctx();
         LinearLayout card = Ui.card(c);
-        TextView icon = Ui.text(c, "⚙", 26, Ui.PRIMARY, false);
+        TextView icon = Ui.text(c, "⚙", 26, Ui.LIME, false);
         icon.setGravity(Gravity.CENTER);
         card.addView(icon);
         TextView t = Ui.sectionTitle(c, "先建立你的健康起点");
         t.setGravity(Gravity.CENTER);
         card.addView(t, Ui.matchWrap(6, c));
-        TextView desc = Ui.text(c, "完成身高、当前体重和目标设置后，就可以编辑每周安排。", 13, Ui.SLATE, false);
+        TextView desc = Ui.text(c, "完成身高、当前体重和目标设置后, AI 会结合你的小米数据生成专属本周计划。", 13, Ui.SLATE, false);
         desc.setGravity(Gravity.CENTER);
         card.addView(desc, Ui.matchWrap(6, c));
         Button go = Ui.primaryButton(c, "去首页完成设置 ›");
@@ -190,26 +215,309 @@ public class PlanPage extends BasePage {
         body.addView(card);
     }
 
-    private void renderConfigured() {
+    private void renderPlanSections() {
         Context c = ctx();
-        JSONObject p = profile;
-        goalIndex = indexOf(GOAL_VALUES, p.optString("goal", "weight_loss"));
-        if (goalIndex < 0) goalIndex = 0;
-        startDate = p.optString("start_date", "");
-        targetDate = p.isNull("target_date") ? "" : p.optString("target_date", "");
-
-        JSONObject weekly = p.optJSONObject("weekly_plan");
-        String[] defaults = templateFor(p.optString("goal", "weight_loss"));
-        for (int i = 0; i < 7; i++) {
-            String v = weekly != null ? weekly.optString(DAY_KEYS[i], "") : "";
-            dayValues[i] = v.isEmpty() ? defaults[i] : v;
+        JSONObject plan = planResult != null ? planResult.optJSONObject("plan") : null;
+        if (plan == null) {
+            LinearLayout card = Ui.card(c);
+            card.setGravity(Gravity.CENTER);
+            if (generating) {
+                card.addView(Ui.text(c, "AI 正在根据你的数据制定本周计划…", 14, Ui.SLATE, false));
+            } else {
+                card.addView(Ui.text(c, "本周计划还没生成好", 14, Ui.SLATE, false));
+                Button retry = Ui.ghostButton(c, "重新生成");
+                retry.setOnClickListener(v -> { requestPlan(true); renderBody(); });
+                card.addView(retry, Ui.matchWrap(10, c));
+            }
+            body.addView(card);
+            return;
         }
+        body.addView(renderGoalCard(plan), Ui.matchWrap(2, c));
+        body.addView(renderTodayCard(plan), Ui.matchWrap(12, c));
+        body.addView(renderWeekCard(plan), Ui.matchWrap(12, c));
+        body.addView(renderTipsCard(plan), Ui.matchWrap(12, c));
+    }
 
-        // ---- 阶段目标卡片 ----
+    /* (a) 本周目标卡 */
+    private LinearLayout renderGoalCard(JSONObject plan) {
+        Context c = ctx();
+        JSONObject targets = plan.optJSONObject("targets");
+        if (targets == null) targets = new JSONObject();
         LinearLayout card = Ui.card(c);
-        card.addView(Ui.sectionHeader(c, "阶段目标", null, null));
-        TextView going = chip("进行中", true);
-        card.addView(going, Ui.matchWrap(6, c));
+        card.addView(Ui.sectionHeader(c, "本周目标", null, null));
+        TextView goal = Ui.text(c, plan.optString("week_goal", ""), 17, Ui.INK, true);
+        card.addView(goal, Ui.matchWrap(8, c));
+
+        LinearLayout row1 = Ui.row(c);
+        row1.addView(Ui.metricTile(c, Ui.PRIMARY, Ui.GREEN_SOFT, "👟", "步数目标",
+                String.valueOf(targets.optInt("steps", 8000)), "步 / 天", -1), tileLp(true));
+        row1.addView(Ui.metricTile(c, Ui.CAL, Ui.CAL_SOFT, "🔥", "活动消耗",
+                String.valueOf(targets.optInt("calories_kcal", 400)), "千卡 / 天", -1), tileLp(false));
+        card.addView(row1, Ui.matchWrap(12, c));
+        LinearLayout row2 = Ui.row(c);
+        row2.addView(Ui.metricTile(c, Ui.MOVE, Ui.MOVE_SOFT, "⏱️", "运动时长",
+                String.valueOf(targets.optInt("exercise_minutes", 30)), "分钟 / 天", -1), tileLp(true));
+        double sleep = targets.optDouble("sleep_hours", 8);
+        row2.addView(Ui.metricTile(c, Ui.SLEEP, Ui.SLEEP_SOFT, "🌙", "睡眠目标",
+                fmtDouble(sleep), "小时 / 晚", -1), tileLp(false));
+        card.addView(row2, Ui.matchWrap(8, c));
+
+        String source = planResult.optString("source", "ai");
+        String sourceText = "local".equals(source)
+                ? "本地规则生成 · AI 暂时不可用, 可点重新生成重试"
+                : "✨ AI 推荐 · 结合你的档案与近 7 天数据生成";
+        card.addView(Ui.text(c, sourceText, 11, Ui.MUTED, false), Ui.matchWrap(12, c));
+        regenButton = Ui.ghostButton(c, generating ? "生成中…" : "↻ 重新生成");
+        regenButton.setEnabled(!generating);
+        regenButton.setOnClickListener(v -> { requestPlan(true); renderBody(); });
+        card.addView(regenButton, Ui.matchWrap(8, c));
+        return card;
+    }
+
+    private LinearLayout.LayoutParams tileLp(boolean left) {
+        LinearLayout.LayoutParams lp = Ui.weight1();
+        if (left) lp.rightMargin = Ui.dp(ctx(), 5); else lp.leftMargin = Ui.dp(ctx(), 5);
+        return lp;
+    }
+
+    /* (b) 今日安排卡: 荧光绿描边突出 + 动作清单 + 今日目标 vs 实际 */
+    private LinearLayout renderTodayCard(JSONObject plan) {
+        Context c = ctx();
+        LinearLayout card = Ui.card(c);
+        GradientDrawable bg = Ui.roundRect(Ui.CARD, 16, c);
+        bg.setStroke(Ui.dp(c, 1), Ui.LIME);
+        card.setBackground(bg);
+
+        int todayIdx = PlanStore.todayIndex();
+        JSONObject day = PlanStore.dayAt(plan, todayIdx);
+        String focus = day != null ? day.optString("focus", "日常活动") : "日常活动";
+        LinearLayout head = Ui.row(c);
+        head.addView(Ui.text(c, "今日 · " + focus, 16, Ui.INK, true), Ui.weight1());
+        head.addView(Ui.chip(c, DAY_NAMES[todayIdx], Ui.ON_LIME, Ui.LIME));
+        card.addView(head);
+
+        JSONArray actions = day != null ? day.optJSONArray("actions") : null;
+        if (actions != null) {
+            for (int i = 0; i < actions.length(); i++) {
+                JSONObject a = actions.optJSONObject(i);
+                if (a == null) continue;
+                card.addView(actionRow(a), Ui.matchWrap(i == 0 ? 12 : 9, c));
+            }
+        }
+        if (day != null) {
+            int[] actual = todayActual();
+            card.addView(progressRow("步数", actual[0], day.optInt("steps_target", 0), Ui.PRIMARY, "步"),
+                    Ui.matchWrap(14, c));
+            card.addView(progressRow("活动消耗", actual[1], day.optInt("calories_target", 0), Ui.CAL, "千卡"),
+                    Ui.matchWrap(10, c));
+        }
+        return card;
+    }
+
+    private LinearLayout actionRow(JSONObject a) {
+        Context c = ctx();
+        LinearLayout row = Ui.row(c);
+        row.setGravity(Gravity.TOP);
+        View dot = new View(c);
+        GradientDrawable dd = new GradientDrawable();
+        dd.setShape(GradientDrawable.OVAL);
+        dd.setColor(Ui.LIME);
+        dot.setBackground(dd);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(Ui.dp(c, 7), Ui.dp(c, 7));
+        dlp.rightMargin = Ui.dp(c, 9);
+        dlp.topMargin = Ui.dp(c, 6);
+        row.addView(dot, dlp);
+        LinearLayout texts = Ui.column(c);
+        texts.addView(Ui.text(c, a.optString("title", ""), 14, Ui.INK, true));
+        String detail = a.optString("detail", "");
+        if (!detail.isEmpty()) {
+            texts.addView(Ui.text(c, detail, 12, Ui.SLATE, false), Ui.matchWrap(2, c));
+        }
+        row.addView(texts, Ui.weight1());
+        int minutes = a.optInt("minutes", 0);
+        if (minutes > 0) {
+            row.addView(Ui.chip(c, minutes + " 分钟", Ui.PRIMARY_DARK, Ui.GREEN_SOFT));
+        }
+        return row;
+    }
+
+    private LinearLayout progressRow(String label, int actual, int target, int color, String unit) {
+        Context c = ctx();
+        LinearLayout col = Ui.column(c);
+        LinearLayout head = Ui.row(c);
+        head.addView(Ui.text(c, label, 12, Ui.SLATE, true), Ui.weight1());
+        String val = target > 0 ? actual + " / " + target + " " + unit : actual + " " + unit;
+        head.addView(Ui.text(c, val, 12, Ui.INK, true));
+        col.addView(head);
+        android.widget.FrameLayout bar = Ui.progressBar(c, target > 0 ? actual / (double) target : 0, color, 6);
+        LinearLayout.LayoutParams blp = (LinearLayout.LayoutParams) bar.getLayoutParams();
+        blp.topMargin = Ui.dp(c, 5);
+        bar.setLayoutParams(blp);
+        col.addView(bar);
+        return col;
+    }
+
+    /** 今日实际 [步数, 消耗]: 优先 dashboard 小米今日, 其次 analytics 今日行 */
+    private int[] todayActual() {
+        int steps = 0, calories = 0;
+        if (dashboard != null) {
+            JSONObject mi = dashboard.optJSONObject("mihealth");
+            JSONObject today = mi != null ? mi.optJSONObject("today") : null;
+            if (today != null) {
+                steps = today.optInt("steps", 0);
+                calories = (int) Math.round(today.optDouble("calories", 0));
+            }
+        }
+        if (steps == 0 && calories == 0) {
+            JSONObject d = analyticsDay(PlanStore.weekDates().get(PlanStore.todayIndex()));
+            if (d != null) {
+                steps = d.optInt("steps", 0);
+                calories = (int) Math.round(d.optDouble("calories", 0));
+            }
+        }
+        return new int[]{steps, calories};
+    }
+
+    private JSONObject analyticsDay(String dateStr) {
+        if (weekAnalytics == null || dateStr == null) return null;
+        JSONArray days = weekAnalytics.optJSONArray("days");
+        if (days == null) return null;
+        for (int i = 0; i < days.length(); i++) {
+            JSONObject d = days.optJSONObject(i);
+            if (d != null && dateStr.equals(d.optString("record_date", ""))) return d;
+        }
+        return null;
+    }
+
+    /* (c) 本周安排卡: 7 天行 + 已过去日期的达标状态 */
+    private LinearLayout renderWeekCard(JSONObject plan) {
+        Context c = ctx();
+        LinearLayout card = Ui.card(c);
+        card.addView(Ui.sectionHeader(c, "本周安排", null, null));
+        List<String> dates = PlanStore.weekDates();
+        int todayIdx = PlanStore.todayIndex();
+        for (int i = 0; i < 7; i++) {
+            JSONObject day = PlanStore.dayAt(plan, i);
+            if (day == null) continue;
+            card.addView(weekRow(day, dates.get(i), i, i == todayIdx, i < todayIdx),
+                    Ui.matchWrap(i == 0 ? 10 : 6, c));
+        }
+        return card;
+    }
+
+    private LinearLayout weekRow(JSONObject day, String dateStr, int idx, boolean isToday, boolean isPast) {
+        Context c = ctx();
+        LinearLayout row = Ui.row(c);
+        row.setGravity(Gravity.TOP);
+        if (isToday) {
+            row.setBackground(Ui.roundRect(Ui.GREEN_SOFT, 12, c));
+            int p = Ui.dp(c, 8);
+            row.setPadding(p, p, p, p);
+        }
+        // 日期徽标: 周几 + 日期号
+        Calendar cal = parseCal(dateStr);
+        LinearLayout badge = Ui.column(c);
+        badge.setGravity(Gravity.CENTER);
+        badge.setBackground(Ui.roundRect(isToday ? Ui.LIME : Ui.SOFT, 12, c));
+        int bp = Ui.dp(c, 5);
+        badge.setPadding(0, bp, 0, bp);
+        badge.addView(centerText(DAY_SHORT[idx], 10, isToday ? Ui.ON_LIME : Ui.MUTED, false));
+        badge.addView(centerText(String.valueOf(cal.get(Calendar.DAY_OF_MONTH)), 15,
+                isToday ? Ui.ON_LIME : Ui.INK, true));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(Ui.dp(c, 42), android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        row.addView(badge, blp);
+
+        LinearLayout mid = Ui.column(c);
+        mid.addView(Ui.text(c, day.optString("focus", "日常活动"), 14, Ui.INK, true));
+        JSONArray actions = day.optJSONArray("actions");
+        if (actions != null && actions.length() > 0) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < actions.length(); i++) {
+                JSONObject a = actions.optJSONObject(i);
+                if (a == null) continue;
+                if (sb.length() > 0) sb.append(" · ");
+                sb.append(a.optString("title", ""));
+            }
+            mid.addView(Ui.text(c, sb.toString(), 12, Ui.SLATE, false), Ui.matchWrap(2, c));
+        }
+        mid.addView(Ui.text(c, "目标 " + day.optInt("steps_target", 0) + " 步 · "
+                + day.optInt("calories_target", 0) + " 千卡", 11, Ui.MUTED, false), Ui.matchWrap(3, c));
+        LinearLayout.LayoutParams mlp = Ui.weight1();
+        mlp.leftMargin = Ui.dp(c, 10);
+        row.addView(mid, mlp);
+
+        if (isPast) {
+            row.addView(dayStatus(day, dateStr));
+        } else if (isToday) {
+            row.addView(Ui.chip(c, "今日", Ui.ON_LIME, Ui.LIME));
+        }
+        return row;
+    }
+
+    /** 已过去日期的达标状态: 对比 analytics 当日步数/消耗与计划目标 */
+    private TextView dayStatus(JSONObject day, String dateStr) {
+        Context c = ctx();
+        JSONObject actual = analyticsDay(dateStr);
+        if (actual == null) return Ui.text(c, "— 无数据", 11, Ui.MUTED, false);
+        int steps = actual.optInt("steps", 0);
+        int calories = (int) Math.round(actual.optDouble("calories", 0));
+        if (steps <= 0 && calories <= 0) return Ui.text(c, "— 无数据", 11, Ui.MUTED, false);
+        boolean stepsOk = steps >= day.optInt("steps_target", Integer.MAX_VALUE);
+        boolean calOk = calories >= day.optInt("calories_target", Integer.MAX_VALUE);
+        if (stepsOk && calOk) return Ui.text(c, "✓ 达标", 11, Ui.PRIMARY_DARK, true);
+        return Ui.text(c, "◐ 部分", 11, Ui.CAL_TEXT, true);
+    }
+
+    private TextView centerText(String s, float sp, int color, boolean bold) {
+        TextView t = Ui.text(ctx(), s, sp, color, bold);
+        t.setGravity(Gravity.CENTER);
+        return t;
+    }
+
+    private static Calendar parseCal(String ds) {
+        Calendar cal = Calendar.getInstance();
+        try {
+            cal.set(Calendar.YEAR, Integer.parseInt(ds.substring(0, 4)));
+            cal.set(Calendar.MONTH, Integer.parseInt(ds.substring(5, 7)) - 1);
+            cal.set(Calendar.DAY_OF_MONTH, Integer.parseInt(ds.substring(8, 10)));
+        } catch (Exception ignored) {}
+        return cal;
+    }
+
+    /* (d) 教练建议卡 */
+    private LinearLayout renderTipsCard(JSONObject plan) {
+        Context c = ctx();
+        LinearLayout card = Ui.card(c);
+        card.addView(Ui.sectionHeader(c, "教练建议", null, null));
+        JSONArray tips = plan.optJSONArray("tips");
+        if (tips != null) {
+            for (int i = 0; i < tips.length(); i++) {
+                String tip = tips.optString(i, "");
+                if (tip.isEmpty()) continue;
+                LinearLayout row = Ui.row(c);
+                row.setGravity(Gravity.TOP);
+                View dot = new View(c);
+                GradientDrawable dd = new GradientDrawable();
+                dd.setShape(GradientDrawable.OVAL);
+                dd.setColor(Ui.LIME);
+                dot.setBackground(dd);
+                LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(Ui.dp(c, 6), Ui.dp(c, 6));
+                dlp.rightMargin = Ui.dp(c, 8);
+                dlp.topMargin = Ui.dp(c, 6);
+                row.addView(dot, dlp);
+                row.addView(Ui.text(c, tip, 13, Ui.SLATE, false), Ui.weight1());
+                card.addView(row, Ui.matchWrap(i == 0 ? 10 : 8, c));
+            }
+        }
+        return card;
+    }
+
+    /* (e) 调整目标卡: 精简保留原表单 (方向/体重/日期), 保存时 weekly_plan 沿用档案已有值 */
+    private void renderGoalForm() {
+        Context c = ctx();
+        LinearLayout card = Ui.card(c);
+        card.addView(Ui.sectionHeader(c, "调整目标", null, null));
+        card.addView(Ui.text(c, "目标会用于下一次 AI 生成计划", 12, Ui.MUTED, false), Ui.matchWrap(2, c));
 
         card.addView(Ui.text(c, "管理方向", 12.5f, Ui.SLATE, true), Ui.matchWrap(12, c));
         LinearLayout chipsRow = Ui.row(c);
@@ -227,16 +535,15 @@ public class PlanPage extends BasePage {
         }
         card.addView(chipsRow, Ui.matchWrap(6, c));
 
-        // 双体重输入
         LinearLayout grid = Ui.row(c);
         LinearLayout tile1 = tileBox(c, "当前体重", "kg");
         curWeightInput = tileInput(tile1);
-        curWeightInput.setText(fmtNum(p, "current_weight"));
+        curWeightInput.setText(formCur);
         LinearLayout tile2 = tileBox(c, "目标体重", "kg");
         tarWeightInput = tileInput(tile2);
-        tarWeightInput.setText(fmtNum(p, "target_weight"));
-        deltaView = Ui.text(c, "", 11, Ui.PRIMARY, true);
-        deltaView.setBackground(roundStroke(Color.parseColor("#ecfdf5"), 999, Color.parseColor("#ecfdf5")));
+        tarWeightInput.setText(formTar);
+        deltaView = Ui.text(c, "", 11, Ui.PRIMARY_DARK, true);
+        deltaView.setBackground(roundStroke(Ui.GREEN_SOFT, 999, Ui.GREEN_SOFT));
         int dp4 = Ui.dp(c, 4);
         deltaView.setPadding(Ui.dp(c, 8), dp4 / 2, Ui.dp(c, 8), dp4 / 2);
         tile2.addView(deltaView, Ui.matchWrap(4, c));
@@ -249,13 +556,18 @@ public class PlanPage extends BasePage {
         updateDelta();
         TextWatcher watcher = new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int n) {}
-            @Override public void onTextChanged(CharSequence s, int a, int b, int n) { updateDelta(); }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int n) {
+                formCur = curWeightInput != null && curWeightInput.getText() != null
+                        ? curWeightInput.getText().toString() : formCur;
+                formTar = tarWeightInput != null && tarWeightInput.getText() != null
+                        ? tarWeightInput.getText().toString() : formTar;
+                updateDelta();
+            }
             @Override public void afterTextChanged(Editable s) {}
         };
         curWeightInput.addTextChangedListener(watcher);
         tarWeightInput.addTextChangedListener(watcher);
 
-        // 日期
         card.addView(Ui.text(c, "计划开始日期", 12.5f, Ui.SLATE, true), Ui.matchWrap(12, c));
         startDateView = dateField(startDate.isEmpty() ? "选择日期" : startDate);
         startDateView.setOnClickListener(v -> pickDate(startDate, true));
@@ -265,73 +577,18 @@ public class PlanPage extends BasePage {
         targetDateView.setOnClickListener(v -> pickDate(targetDate, false));
         card.addView(targetDateView, Ui.matchWrap(4, c));
 
-        card.addView(Ui.text(c, "💡 日期是规划参考，可以按身体感受随时调整，不代表死板的进度承诺。",
-                12, Ui.MUTED, false), Ui.matchWrap(12, c));
-        body.addView(card);
-
-        // ---- 周安排卡片 ----
-        LinearLayout schedule = Ui.card(c);
-        schedule.addView(Ui.sectionHeader(c, "安排一个现实的星期", null, null));
-        schedule.addView(Ui.text(c, "训练、活动和休息都算计划的一部分", 12.5f, Ui.SLATE, false), Ui.matchWrap(2, c));
-        TextView weekPill = chip("周节奏", false);
-        schedule.addView(weekPill, Ui.matchWrap(6, c));
-
-        for (int i = 0; i < 7; i++) {
-            final int idx = i;
-            LinearLayout rowLayout = Ui.row(c);
-            // 日徽标: 彩色圆 (工作日绿 / 周末橙), 圆内单字
-            TextView badge = Ui.text(c, DAY_NAMES[i].substring(1), 13, Color.WHITE, true);
-            badge.setGravity(Gravity.CENTER);
-            badge.setBackground(Ui.roundRect(i >= 5 ? Ui.CAL : Ui.PRIMARY, 999, c));
-            badge.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(c, 34), Ui.dp(c, 34)));
-            rowLayout.addView(badge);
-
-            LinearLayout selector = Ui.column(c);
-            selector.setBackground(roundStroke(Color.parseColor("#f8fafc"), 12, Ui.BORDER));
-            int hp = Ui.dp(c, 12), vp = Ui.dp(c, 9);
-            selector.setPadding(hp, vp, hp, vp);
-            TextView val = Ui.text(c, dayValues[i], 14.5f, Ui.INK, true);
-            TextView tag = Ui.chip(c, "", Ui.PRIMARY_DARK, Ui.GREEN_SOFT);
-            styleTagChip(tag, dayValues[i]);
-            selector.addView(val);
-            LinearLayout.LayoutParams tagLp = new LinearLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
-            tagLp.topMargin = Ui.dp(c, 5);
-            selector.addView(tag, tagLp);
-            dayValueViews[i] = val;
-            dayTagViews[i] = tag;
-            LinearLayout.LayoutParams slp = Ui.weight1();
-            slp.leftMargin = Ui.dp(c, 10);
-            selector.setOnClickListener(v -> pickActivity(idx));
-            rowLayout.addView(selector, slp);
-            schedule.addView(rowLayout, Ui.matchWrap(8, c));
-        }
-
         saveButton = Ui.primaryButton(c, "保存为新版本");
         saveButton.setOnClickListener(v -> save());
-        schedule.addView(saveButton, Ui.matchWrap(16, c));
+        card.addView(saveButton, Ui.matchWrap(16, c));
         TextView note = Ui.text(c, "保存会新增一份计划版本，历史版本保留。", 12, Ui.MUTED, false);
         note.setGravity(Gravity.CENTER);
-        schedule.addView(note, Ui.matchWrap(6, c));
-        body.addView(schedule, Ui.matchWrap(12, c));
-    }
-
-    /** 强度标签 chip 配色: 中高强度=橙 / 恢复日=灰 / 其余=绿; 切换活动时同步刷新 */
-    private void styleTagChip(TextView t, String activity) {
-        String tag = activityTag(activity);
-        int fg, bg;
-        if ("中高强度".equals(tag)) { fg = Color.parseColor("#c2410c"); bg = Ui.CAL_SOFT; }
-        else if ("恢复日".equals(tag)) { fg = Ui.SLATE; bg = Ui.SOFT; }
-        else { fg = Ui.PRIMARY_DARK; bg = Ui.GREEN_SOFT; }
-        t.setText(tag);
-        t.setTextColor(fg);
-        t.setBackground(Ui.roundRect(bg, 10, ctx()));
+        card.addView(note, Ui.matchWrap(6, c));
+        body.addView(card, Ui.matchWrap(12, c));
     }
 
     private LinearLayout tileBox(Context c, String label, String unit) {
         LinearLayout box = Ui.column(c);
-        box.setBackground(roundStroke(Color.parseColor("#f8fafc"), 14, Ui.BORDER));
+        box.setBackground(roundStroke(Ui.SOFT, 14, Ui.BORDER));
         int p = Ui.dp(c, 12);
         box.setPadding(p, p, p, p);
         box.addView(Ui.text(c, label, 12, Ui.SLATE, true));
@@ -349,17 +606,17 @@ public class PlanPage extends BasePage {
 
     private TextView dateField(String text) {
         TextView t = Ui.text(ctx(), text + "  📅", 14, Ui.INK, true);
-        t.setBackground(roundStroke(Color.parseColor("#f8fafc"), 12, Ui.BORDER));
+        t.setBackground(roundStroke(Ui.SOFT, 12, Ui.BORDER));
         int hp = Ui.dp(ctx(), 12), vp = Ui.dp(ctx(), 11);
         t.setPadding(hp, vp, hp, vp);
         return t;
     }
 
     private TextView chip(String text, boolean active) {
-        TextView t = Ui.text(ctx(), text, 12.5f, active ? Color.WHITE : Color.parseColor("#475569"), true);
+        TextView t = Ui.text(ctx(), text, 12.5f, active ? Ui.ON_LIME : Ui.SLATE, true);
         t.setGravity(Gravity.CENTER);
-        t.setBackground(roundStroke(active ? Ui.PRIMARY : Color.parseColor("#f8fafc"), 999,
-                active ? Ui.PRIMARY : Ui.BORDER));
+        t.setBackground(roundStroke(active ? Ui.LIME : Ui.SOFT, 999,
+                active ? Ui.LIME : Ui.BORDER));
         int vp = Ui.dp(ctx(), 7);
         t.setPadding(Ui.dp(ctx(), 8), vp, Ui.dp(ctx(), 8), vp);
         return t;
@@ -369,17 +626,17 @@ public class PlanPage extends BasePage {
         for (int i = 0; i < 4; i++) {
             if (goalChips[i] == null) continue;
             boolean active = i == goalIndex;
-            goalChips[i].setTextColor(active ? Color.WHITE : Color.parseColor("#475569"));
-            goalChips[i].setBackground(roundStroke(active ? Ui.PRIMARY : Color.parseColor("#f8fafc"), 999,
-                    active ? Ui.PRIMARY : Ui.BORDER));
+            goalChips[i].setTextColor(active ? Ui.ON_LIME : Ui.SLATE);
+            goalChips[i].setBackground(roundStroke(active ? Ui.LIME : Ui.SOFT, 999,
+                    active ? Ui.LIME : Ui.BORDER));
         }
     }
 
     private void updateDelta() {
-        if (deltaView == null || curWeightInput == null || tarWeightInput == null) return;
+        if (deltaView == null) return;
         try {
-            double cur = Double.parseDouble(curWeightInput.getText().toString());
-            double tar = Double.parseDouble(tarWeightInput.getText().toString());
+            double cur = Double.parseDouble(formCur);
+            double tar = Double.parseDouble(formTar);
             double delta = Math.round((tar - cur) * 10.0) / 10.0;
             deltaView.setText((delta > 0 ? "+" : "") + fmtDouble(delta) + " kg");
             deltaView.setVisibility(View.VISIBLE);
@@ -397,7 +654,7 @@ public class PlanPage extends BasePage {
             d = Integer.parseInt(current.substring(8, 10));
         }
         new DatePickerDialog(ctx(), (view, yy, mm, dd) -> {
-            String val = String.format(java.util.Locale.US, "%04d-%02d-%02d", yy, mm + 1, dd);
+            String val = String.format(Locale.US, "%04d-%02d-%02d", yy, mm + 1, dd);
             if (isStart) {
                 startDate = val;
                 if (startDateView != null) startDateView.setText(val + "  📅");
@@ -408,26 +665,11 @@ public class PlanPage extends BasePage {
         }, y, m, d).show();
     }
 
-    private void pickActivity(final int dayIdx) {
-        int choice = indexOf(WEEK_OPTIONS, dayValues[dayIdx]);
-        if (choice < 0) choice = 0;
-        new AlertDialog.Builder(ctx())
-                .setTitle(DAY_NAMES[dayIdx] + "的安排")
-                .setSingleChoiceItems(WEEK_OPTIONS, choice, (dialog, which) -> {
-                    dayValues[dayIdx] = WEEK_OPTIONS[which];
-                    if (dayValueViews[dayIdx] != null) dayValueViews[dayIdx].setText(dayValues[dayIdx]);
-                    if (dayTagViews[dayIdx] != null) styleTagChip(dayTagViews[dayIdx], dayValues[dayIdx]);
-                    dialog.dismiss();
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
     private void save() {
         if (saving || profile == null) return;
         String heightStr = fmtNum(profile, "height_cm");
-        String curStr = curWeightInput != null ? curWeightInput.getText().toString().trim() : "";
-        String tarStr = tarWeightInput != null ? tarWeightInput.getText().toString().trim() : "";
+        String curStr = formCur.trim();
+        String tarStr = formTar.trim();
         if (heightStr.isEmpty() || curStr.isEmpty() || tarStr.isEmpty() || startDate.isEmpty()) {
             toast("请先在首页完成个人设置");
             return;
@@ -453,8 +695,6 @@ public class PlanPage extends BasePage {
         if (saveButton != null) { saveButton.setEnabled(false); saveButton.setText("正在保存…"); }
 
         try {
-            JSONObject weekly = new JSONObject();
-            for (int i = 0; i < 7; i++) weekly.put(DAY_KEYS[i], dayValues[i]);
             JSONObject payload = new JSONObject();
             payload.put("height_cm", height);
             payload.put("current_weight", cur);
@@ -462,7 +702,9 @@ public class PlanPage extends BasePage {
             payload.put("start_date", startDate);
             payload.put("target_date", targetDate.isEmpty() ? JSONObject.NULL : targetDate);
             payload.put("goal", GOAL_VALUES[goalIndex]);
-            payload.put("weekly_plan", weekly);
+            // 每周安排已由 AI 计划接管, 保存时沿用档案里已有的 weekly_plan 不做改动
+            JSONObject weekly = profile.optJSONObject("weekly_plan");
+            payload.put("weekly_plan", weekly != null ? weekly : new JSONObject());
             JSONObject reminders = profile.optJSONObject("reminder_settings");
             payload.put("reminder_settings", reminders != null ? reminders : new JSONObject());
 
@@ -471,6 +713,7 @@ public class PlanPage extends BasePage {
                     saving = false;
                     if (saveButton != null) { saveButton.setEnabled(true); saveButton.setText("保存为新版本"); }
                     toast("新计划已保存");
+                    formInit = false; // 下次 load 以新档案刷新表单初值
                     load();
                 }
                 @Override public void onError(String message) {

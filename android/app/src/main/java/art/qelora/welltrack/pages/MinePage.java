@@ -81,7 +81,7 @@ public class MinePage extends BasePage {
         headLeft.addView(eyebrow);
         headLeft.addView(Ui.title(ctx(), "我的"), Ui.matchWrap(4, ctx()));
         head.addView(headLeft, Ui.weight1());
-        heroPill = pill("健康空间", Color.parseColor("#ecfdf5"), Ui.PRIMARY_DARK);
+        heroPill = pill("健康空间", Ui.GREEN_SOFT, Ui.PRIMARY_DARK);
         heroPill.setVisibility(GONE);
         head.addView(heroPill);
         content.addView(head);
@@ -98,9 +98,9 @@ public class MinePage extends BasePage {
         avatarBg.setBackground(Ui.roundRect(Color.parseColor("#33ffffff"), 999, ctx()));
         avatar.addView(avatarBg, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        TextView badge = Ui.text(ctx(), "✓", 9, Ui.DEEP, true);
+        TextView badge = Ui.text(ctx(), "✓", 9, Ui.ON_LIME, true);
         badge.setGravity(Gravity.CENTER);
-        badge.setBackground(Ui.roundRect(Color.WHITE, 999, ctx()));
+        badge.setBackground(Ui.roundRect(Ui.LIME, 999, ctx()));
         FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(Ui.dp(ctx(), 16), Ui.dp(ctx(), 16));
         blp.gravity = Gravity.BOTTOM | Gravity.END;
         avatar.addView(badge, blp);
@@ -368,7 +368,7 @@ public class MinePage extends BasePage {
     private void renderMi() {
         miPill.setText(miConnected ? "已连接" : "未连接");
         miPill.setBackground(Ui.roundRect(
-                miConnected ? Color.parseColor("#ecfdf5") : Ui.SOFT, 999, ctx()));
+                miConnected ? Ui.GREEN_SOFT : Ui.SOFT, 999, ctx()));
         miPill.setTextColor(miConnected ? Ui.PRIMARY_DARK : Ui.SLATE);
         miBox.removeAllViews();
         codeInput = null;
@@ -419,8 +419,8 @@ public class MinePage extends BasePage {
         miBox.addView(note, Ui.matchWrap(12, ctx()));
         if (!miReady) {
             TextView warn = Ui.text(ctx(), "后端加密密钥未配置；请检查环境变量后再进行同步。",
-                    12, Color.parseColor("#92400e"), false);
-            warn.setBackground(Ui.roundRect(Color.parseColor("#fffbeb"), 10, ctx()));
+                    12, Ui.AMBER_TEXT, false);
+            warn.setBackground(Ui.roundRect(Ui.AMBER_SOFT_DARK, 10, ctx()));
             warn.setPadding(Ui.dp(ctx(), 10), Ui.dp(ctx(), 10), Ui.dp(ctx(), 10), Ui.dp(ctx(), 10));
             miBox.addView(warn, Ui.matchWrap(10, ctx()));
         }
@@ -433,7 +433,7 @@ public class MinePage extends BasePage {
         unbindBtn.setText("解除连接");
         unbindBtn.setTextSize(14);
         unbindBtn.setTextColor(Ui.RED);
-        unbindBtn.setBackground(Ui.roundRect(Color.parseColor("#fef2f2"), 12, ctx()));
+        unbindBtn.setBackground(Ui.roundRect(Ui.RED_SOFT, 12, ctx()));
         unbindBtn.setAllCaps(false);
         unbindBtn.setEnabled(!syncing);
         unbindBtn.setOnClickListener(v -> unbindMiHealth());

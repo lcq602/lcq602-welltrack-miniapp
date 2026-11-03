@@ -130,7 +130,7 @@ public class RecordsPage extends BasePage {
         weightCard.addView(waistRow, Ui.matchWrap(10, c));
 
         // 手环同步提示 / 已有记录提示 (原有逻辑)
-        miHintView = Ui.text(c, "", 12.5f, Color.parseColor("#0369a1"), false);
+        miHintView = Ui.text(c, "", 12.5f, Ui.MOVE, false);
         miHintView.setVisibility(View.GONE);
         weightCard.addView(miHintView, Ui.matchWrap(12, c));
         alreadyView = Ui.text(c, "✓ 这一天已有手工记录，可切换上方日期查看或修改。", 12.5f, Ui.PRIMARY, false);
@@ -267,7 +267,7 @@ public class RecordsPage extends BasePage {
 
     private TextView habitTile(String name, boolean active) {
         TextView t = Ui.text(ctx(), (active ? "✓ " : "+ ") + name, 13.5f,
-                active ? Ui.PRIMARY : Color.parseColor("#475569"), true);
+                active ? Ui.PRIMARY_DARK : Ui.SLATE, true);
         t.setGravity(Gravity.CENTER);
         t.setBackground(Ui.roundRect(active ? Ui.GREEN_SOFT : Ui.SOFT, 12, ctx()));
         int vp = Ui.dp(ctx(), 12);
@@ -279,14 +279,14 @@ public class RecordsPage extends BasePage {
         if (habitChips[i] == null) return;
         boolean active = habitSelected[i];
         habitChips[i].setText((active ? "✓ " : "+ ") + HABIT_NAMES[i]);
-        habitChips[i].setTextColor(active ? Ui.PRIMARY : Color.parseColor("#475569"));
+        habitChips[i].setTextColor(active ? Ui.PRIMARY_DARK : Ui.SLATE);
         habitChips[i].setBackground(Ui.roundRect(active ? Ui.GREEN_SOFT : Ui.SOFT, 12, ctx()));
     }
 
     private TextView filterChip(String text, boolean active) {
-        TextView t = Ui.text(ctx(), text, 12.5f, active ? Color.WHITE : Color.parseColor("#475569"), true);
+        TextView t = Ui.text(ctx(), text, 12.5f, active ? Color.WHITE : Ui.SLATE, true);
         t.setGravity(Gravity.CENTER);
-        t.setBackground(roundStroke(active ? Ui.PRIMARY : Color.WHITE, 999, active ? Ui.PRIMARY : Ui.BORDER));
+        t.setBackground(roundStroke(active ? Ui.PRIMARY : Ui.SOFT, 999, active ? Ui.PRIMARY : Ui.BORDER));
         int vp = Ui.dp(ctx(), 7), hp = Ui.dp(ctx(), 12);
         t.setPadding(hp, vp, hp, vp);
         return t;
@@ -297,8 +297,8 @@ public class RecordsPage extends BasePage {
         for (int i = 0; i < 3; i++) {
             if (filterChips[i] == null) continue;
             boolean active = types[i].equals(filterType);
-            filterChips[i].setTextColor(active ? Color.WHITE : Color.parseColor("#475569"));
-            filterChips[i].setBackground(roundStroke(active ? Ui.PRIMARY : Color.WHITE, 999,
+            filterChips[i].setTextColor(active ? Color.WHITE : Ui.SLATE);
+            filterChips[i].setBackground(roundStroke(active ? Ui.PRIMARY : Ui.SOFT, 999,
                     active ? Ui.PRIMARY : Ui.BORDER));
         }
         // “全部”胶囊带总数, 与源码一致
@@ -463,8 +463,8 @@ public class RecordsPage extends BasePage {
 
         String diet = r.optString("diet", "");
         if (!diet.isEmpty()) {
-            TextView d = Ui.text(c, "🥗 " + diet, 12.5f, Color.parseColor("#334155"), false);
-            d.setBackground(roundStroke(Color.parseColor("#f0fdf4"), 10, Color.parseColor("#dcfce7")));
+            TextView d = Ui.text(c, "🥗 " + diet, 12.5f, Ui.PRIMARY_DARK, false);
+            d.setBackground(roundStroke(Ui.GREEN_SOFT, 10, Ui.BORDER));
             int p = Ui.dp(c, 10);
             d.setPadding(p, p, p, p);
             card.addView(d, Ui.matchWrap(8, c));

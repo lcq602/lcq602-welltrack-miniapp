@@ -102,7 +102,7 @@ public class AgentPage extends BasePage {
         LinearLayout row = Ui.row(ctx());
         int h = Ui.dp(ctx(), 14);
         row.setPadding(h, Ui.dp(ctx(), 10), h, Ui.dp(ctx(), 10));
-        TextView back = Ui.text(ctx(), "‹ 返回", 15, Ui.PRIMARY, true);
+        TextView back = Ui.text(ctx(), "‹ 返回", 15, Ui.LIME, true);
         back.setPadding(0, Ui.dp(ctx(), 2), Ui.dp(ctx(), 12), Ui.dp(ctx(), 2));
         back.setOnClickListener(v -> activity().closeOverlay());
         row.addView(back);
@@ -183,7 +183,7 @@ public class AgentPage extends BasePage {
     private TextView addBubble(String text, boolean mine) {
         LinearLayout row = Ui.row(ctx());
         row.setGravity(mine ? Gravity.END : Gravity.START);
-        TextView bubble = Ui.text(ctx(), text, 14, mine ? Color.WHITE : Ui.INK, false);
+        TextView bubble = Ui.text(ctx(), text, 14, mine ? Ui.ON_LIME : Ui.INK, false);
         bubble.setBackground(mine ? Ui.primaryGradient(ctx()) : Ui.cardBg(ctx()));
         int hp = Ui.dp(ctx(), 12), vp = Ui.dp(ctx(), 9);
         bubble.setPadding(hp, vp, hp, vp);

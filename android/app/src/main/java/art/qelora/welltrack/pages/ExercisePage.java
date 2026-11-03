@@ -320,7 +320,7 @@ public class ExercisePage extends BasePage {
         TextView sq = Ui.text(ctx(), icon, 20, Ui.INK, false);
         sq.setGravity(Gravity.CENTER);
         sq.setBackground(Ui.roundRect("力量训练".equals(kind)
-                ? Color.parseColor("#fef3c7") : Ui.MOVE_SOFT, 12, ctx()));
+                ? Ui.CAL_SOFT : Ui.MOVE_SOFT, 12, ctx()));
         int sz = Ui.dp(ctx(), 44);
         row.addView(sq, new LinearLayout.LayoutParams(sz, sz));
         LinearLayout info = Ui.column(ctx());

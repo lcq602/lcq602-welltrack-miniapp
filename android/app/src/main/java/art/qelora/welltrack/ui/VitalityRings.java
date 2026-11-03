@@ -13,7 +13,7 @@ import android.view.View;
  */
 public class VitalityRings extends View {
     private double steps = 0, calories = 0, move = 0;
-    private int trackColor = Color.parseColor("#e8edf2");
+    private int trackColor = Color.parseColor("#242b24");
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     public VitalityRings(Context c) {

@@ -121,6 +121,8 @@ export default {
         case "DELETE /api/v1/integrations/mihealth/connection": return await mihealthUnbind(env, uid);
         case "POST /api/v1/agent/chat": return await agentChat(request, env, uid);
         case "GET /api/v1/agent/daily-insight": return await agentDailyInsight(env, uid);
+        case "GET /api/v1/agent/plan": return await agentPlan(request, env, uid);
+        case "POST /api/v1/agent/plan": return await agentPlan(request, env, uid);
         default: return err(404, "接口不存在");
       }
     } catch (e) {
@@ -691,6 +693,99 @@ const messages = [
 const { reply, model} = await runAi(env, messages);
 if (!reply) throw httpErr(502, "智能体暂时没有回应, 请稍后再试");
 return json({ reply, model});
+}
+
+const PLAN_SYSTEM = `你是「轻衡健康」的 AI 健康教练。基于用户的目标与近期真实数据, 制定一份具体可执行的本周计划。
+必须只输出一个 JSON 对象, 不要输出任何其他文字、解释或 Markdown 代码块标记。结构:
+{"week_goal":"一句话本周重点(30字内)","targets":{"steps":8000,"calories_kcal":400,"exercise_minutes":30,"sleep_hours":8},"days":[{"key":"mon","focus":"主题(8字内)","actions":[{"title":"动作名","detail":"具体做法与强度(40字内)","minutes":30}],"steps_target":8000,"calories_target":400}, 共7天 key 依次 mon tue wed thu fri sat sun],"tips":["建议1","建议2","建议3"]}
+制定原则:
+- 循序渐进: 近期日均步数/消耗明显低于标准目标时, 本周目标定在近期水平上浮 10%-20%, 不要一步到位; 已接近或超过标准则用标准或略高。
+- 一周安排 2-3 天运动日 (结合用户常做的运动类型)、1-2 天主动恢复 (散步/拉伸)、至少 1 天完全休息; 运动日 2-3 个具体动作, 恢复日 1-2 个。
+- 动作要具体: 做什么、多久、什么强度, 能直接照做; 减重人群优先低冲击有氧+力量, 睡眠不足时降低强度。
+- tips 3-4 条, 覆盖饮食/睡眠/补水或补足技巧, 贴合数据短板。`;
+
+function isoWeekStartStr() {
+  const t = todayStr();
+  const dow = (new Date(t + "T00:00:00Z").getUTCDay() + 6) % 7;
+  return addDays(t, -dow);
+}
+
+function normalizePlan(raw) {
+  const t = (raw && raw.targets) || {};
+  const clamp = (v, lo, hi, dft) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : dft;
+  };
+  const plan = {
+    week_goal: typeof (raw && raw.week_goal) === "string" && raw.week_goal ? raw.week_goal.slice(0, 60) : "稳步提升活动量, 养成规律节奏",
+    targets: {
+      steps: clamp(t.steps, 3000, 20000, 8000),
+      calories_kcal: clamp(t.calories_kcal, 100, 1200, 400),
+      exercise_minutes: clamp(t.exercise_minutes, 0, 180, 30),
+      sleep_hours: clamp(t.sleep_hours, 5, 10, 8),
+    },
+    days: [],
+    tips: Array.isArray(raw && raw.tips) ? raw.tips.filter((x) => typeof x === "string").slice(0, 5) : [],
+  };
+  const keys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  const byKey = {};
+  if (Array.isArray(raw && raw.days)) for (const d of raw.days) if (d && keys.includes(d.key)) byKey[d.key] = d;
+  for (const k of keys) {
+    const d = byKey[k] || {};
+    const actions = Array.isArray(d.actions) ? d.actions.filter((a) => a && typeof a.title === "string").slice(0, 4).map((a) => ({
+      title: String(a.title).slice(0, 30),
+      detail: typeof a.detail === "string" ? a.detail.slice(0, 80) : "",
+      minutes: Number.isFinite(Number(a.minutes)) ? Math.max(0, Math.round(Number(a.minutes))) : null,
+    })) : [];
+    plan.days.push({
+      key: k,
+      focus: typeof d.focus === "string" && d.focus ? d.focus.slice(0, 16) : "日常活动",
+      actions,
+      steps_target: clamp(d.steps_target, 2000, 25000, plan.targets.steps),
+      calories_target: clamp(d.calories_target, 50, 1500, plan.targets.calories_kcal),
+    });
+  }
+  if (!plan.tips.length) plan.tips = ["晚饭后步行 20-30 分钟是补步数最稳的办法", "睡前 1 小时放下手机, 保证 7-8 小时睡眠", "每天喝够 1500-2000ml 水"];
+  return plan;
+}
+
+async function agentPlan(request, env, uid) {
+  const weekStart = isoWeekStartStr();
+  if (request.method === "GET") {
+    const row = await env.DB.prepare("SELECT content FROM agent_cache WHERE user_id=? AND cache_date=? AND kind='weekly_plan'").bind(uid, weekStart).first();
+    if (!row) throw httpErr(404, "本周计划尚未生成");
+    return json({ plan: JSON.parse(row.content), week_start: weekStart, cached: true, source: "ai" });
+  }
+  const b = await request.json().catch(() => ({}));
+  if (!b.force) {
+    const row = await env.DB.prepare("SELECT content FROM agent_cache WHERE user_id=? AND cache_date=? AND kind='weekly_plan'").bind(uid, weekStart).first();
+    if (row) return json({ plan: JSON.parse(row.content), week_start: weekStart, cached: true, source: "ai" });
+  }
+  let context = "";
+  if (typeof b.context === "string" && b.context.trim()) context = b.context.trim().slice(0, 4000);
+  else if (b.context && typeof b.context === "object") context = JSON.stringify(b.context).slice(0, 4000);
+  if (!context) context = await buildAgentContext(env, uid);
+  const model = env.AI_MODEL || "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+  const result = await env.AI.run(model, {
+    messages: [
+      { role: "system", content: PLAN_SYSTEM },
+      { role: "user", content: "【用户健康数据】\n" + context + "\n\n请制定本周 (周一到周日) 计划, 只输出 JSON。" },
+    ],
+    max_tokens: 3000, temperature: 0.5,
+  });
+  const respVal = result && (result.response !== undefined ? result.response : result.text);
+  let raw = null;
+  if (respVal && typeof respVal === "object") raw = respVal;
+  else {
+    const text = String(respVal || "");
+    const start = text.indexOf("{"), end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) { try { raw = JSON.parse(text.slice(start, end + 1)); } catch (e) { raw = null; } }
+  }
+  if (!raw) throw httpErr(502, "计划生成失败, 请稍后再试");
+  const plan = normalizePlan(raw);
+  plan.model = model;
+  await env.DB.prepare("INSERT OR REPLACE INTO agent_cache(user_id,cache_date,kind,content) VALUES(?,?,'weekly_plan',?)").bind(uid, weekStart, JSON.stringify(plan)).run();
+  return json({ plan, week_start: weekStart, cached: false, source: "ai" });
 }
 
 async function agentDailyInsight(env, uid) {

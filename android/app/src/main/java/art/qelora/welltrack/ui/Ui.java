@@ -16,29 +16,40 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** 与小程序 WXSS 主题一致的原生控件工厂 (Serene Balance 主题)。 */
+/**
+ * 原生控件工厂。v2.2 起全局「深色 + 荧光绿」主题 (参考健身 App 深色风):
+ * 近黑底 / 深卡面 / 荧光黄绿强调; 浅色语义对成对翻转 (底变深、字变浅) 保证深底可读。
+ */
 public class Ui {
-    public static final int BG = Color.parseColor("#f6f8fb");
-    public static final int CARD = Color.WHITE;
-    public static final int INK = Color.parseColor("#0f172a");
-    public static final int SLATE = Color.parseColor("#64748b");
-    public static final int MUTED = Color.parseColor("#94a3b8");
-    public static final int BORDER = Color.parseColor("#e2e8f0");
-    public static final int PRIMARY = Color.parseColor("#059669");
-    public static final int PRIMARY_DARK = Color.parseColor("#00855d");
-    public static final int SOFT = Color.parseColor("#f1f5f9");
-    public static final int BLUE_SOFT = Color.parseColor("#eff6ff");
-    public static final int RED = Color.parseColor("#dc2626");
-    // v2 指标专属色 (参考 Mi Fitness 活力值体系: 步数绿 / 消耗橙 / 睡眠紫 / 运动蓝)
+    public static final int BG = Color.parseColor("#0B0E0B");
+    public static final int CARD = Color.parseColor("#161A16");
+    public static final int INK = Color.parseColor("#F4F7F2");
+    public static final int SLATE = Color.parseColor("#A9B4A6");
+    public static final int MUTED = Color.parseColor("#7C877A");
+    public static final int BORDER = Color.parseColor("#2A312A");
+    public static final int PRIMARY = Color.parseColor("#10b981");
+    /** 深底上的绿文字 (原深绿文字翻转为浅绿, 与 GREEN_SOFT 深底成对使用) */
+    public static final int PRIMARY_DARK = Color.parseColor("#7ee2a8");
+    public static final int SOFT = Color.parseColor("#1E241E");
+    public static final int BLUE_SOFT = Color.parseColor("#12283d");
+    public static final int RED = Color.parseColor("#f87171");
+    /** v2.2 荧光绿强调色 (CTA / 高亮 / 今天标记), 及它上面的近黑文字 */
+    public static final int LIME = Color.parseColor("#B8F135");
+    public static final int ON_LIME = Color.parseColor("#131806");
+    // 指标专属色 (参考 Mi Fitness 活力值体系: 步数绿 / 消耗橙 / 睡眠紫 / 运动蓝), 深色版: 底变深、字变浅
     public static final int CAL = Color.parseColor("#f97316");
-    public static final int CAL_SOFT = Color.parseColor("#fff7ed");
-    public static final int SLEEP = Color.parseColor("#8b5cf6");
-    public static final int SLEEP_SOFT = Color.parseColor("#f5f3ff");
-    public static final int MOVE = Color.parseColor("#0ea5e9");
-    public static final int MOVE_SOFT = Color.parseColor("#f0f9ff");
-    public static final int GREEN_SOFT = Color.parseColor("#ecfdf5");
-    public static final int DEEP = Color.parseColor("#065f46");
-    public static final int DEEP2 = Color.parseColor("#047857");
+    public static final int CAL_TEXT = Color.parseColor("#fdba74");
+    public static final int CAL_SOFT = Color.parseColor("#2a1a0d");
+    public static final int SLEEP = Color.parseColor("#a78bfa");
+    public static final int SLEEP_SOFT = Color.parseColor("#1e1836");
+    public static final int MOVE = Color.parseColor("#38bdf8");
+    public static final int MOVE_SOFT = Color.parseColor("#0c2231");
+    public static final int GREEN_SOFT = Color.parseColor("#12261a");
+    public static final int RED_SOFT = Color.parseColor("#2a1212");
+    public static final int AMBER_SOFT_DARK = Color.parseColor("#2a2110");
+    public static final int AMBER_TEXT = Color.parseColor("#fbbf24");
+    public static final int DEEP = Color.parseColor("#0a130d");
+    public static final int DEEP2 = Color.parseColor("#1c4630");
 
     public static int dp(Context c, float v) {
         return (int) (v * c.getResources().getDisplayMetrics().density + 0.5f);
@@ -57,9 +68,10 @@ public class Ui {
         return d;
     }
 
+    /** 荧光绿渐变 (主按钮 / 用户气泡等强调面) */
     public static GradientDrawable primaryGradient(Context c) {
         GradientDrawable d = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR, new int[]{PRIMARY, PRIMARY_DARK});
+                GradientDrawable.Orientation.TL_BR, new int[]{LIME, Color.parseColor("#93d42a")});
         d.setCornerRadius(dp(c, 14));
         return d;
     }
@@ -91,7 +103,7 @@ public class Ui {
         return l;
     }
 
-    /** 白色圆角卡片容器 */
+    /** 深色圆角卡片容器 */
     public static LinearLayout card(Context c) {
         LinearLayout l = column(c);
         l.setBackground(cardBg(c));
@@ -104,7 +116,7 @@ public class Ui {
         Button b = new Button(c);
         b.setText(s);
         b.setTextSize(15);
-        b.setTextColor(Color.WHITE);
+        b.setTextColor(ON_LIME);
         b.setTypeface(Typeface.DEFAULT_BOLD);
         b.setBackground(primaryGradient(c));
         b.setAllCaps(false);
@@ -117,8 +129,10 @@ public class Ui {
         Button b = new Button(c);
         b.setText(s);
         b.setTextSize(14);
-        b.setTextColor(PRIMARY);
-        b.setBackground(roundRect(Color.parseColor("#ecfdf5"), 12, c));
+        b.setTextColor(INK);
+        GradientDrawable bg = roundRect(SOFT, 12, c);
+        bg.setStroke(1, BORDER);
+        b.setBackground(bg);
         b.setAllCaps(false);
         return b;
     }
@@ -157,7 +171,7 @@ public class Ui {
 
     // ---------- v2 设计系统 (视觉升级轮次加入) ----------
 
-    /** 大圆角深绿渐变主视觉卡背景 */
+    /** 大圆角深绿黑渐变主视觉卡背景 */
     public static GradientDrawable heroGradient(Context c) {
         GradientDrawable d = new GradientDrawable(
                 GradientDrawable.Orientation.TL_BR, new int[]{DEEP2, DEEP});
@@ -199,7 +213,7 @@ public class Ui {
     /** 细进度条 (轨道 + 彩色填充), ratio 0..1 */
     public static FrameLayout progressBar(Context c, double ratio, int color, int heightDp) {
         FrameLayout track = new FrameLayout(c);
-        track.setBackground(roundRect(Color.parseColor("#e8edf2"), heightDp / 2f, c));
+        track.setBackground(roundRect(Color.parseColor("#242b24"), heightDp / 2f, c));
         track.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(c, heightDp)));
         final View fill = new View(c);

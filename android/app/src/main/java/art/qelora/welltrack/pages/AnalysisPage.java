@@ -78,7 +78,7 @@ public class AnalysisPage extends BasePage {
         LinearLayout.LayoutParams tlp = Ui.matchWrap(4, ctx());
         headLeft.addView(title, tlp);
         head.addView(headLeft, Ui.weight1());
-        insightPill = pill("趋势洞察", Color.parseColor("#ecfdf5"), Ui.PRIMARY_DARK);
+        insightPill = pill("趋势洞察", Ui.GREEN_SOFT, Ui.PRIMARY_DARK);
         insightPill.setVisibility(GONE);
         head.addView(insightPill);
         content.addView(head);
@@ -117,7 +117,7 @@ public class AnalysisPage extends BasePage {
     private void stylePeriodPills() {
         for (int i = 0; i < 3; i++) {
             boolean active = PERIOD_KEYS[i].equals(period);
-            periodPills[i].setBackground(active ? Ui.roundRect(Color.WHITE, 999, ctx()) : null);
+            periodPills[i].setBackground(active ? Ui.roundRect(Color.parseColor("#2e362e"), 999, ctx()) : null);
             periodPills[i].setTextColor(active ? Ui.INK : Ui.SLATE);
             periodPills[i].setTypeface(active ? android.graphics.Typeface.DEFAULT_BOLD : android.graphics.Typeface.DEFAULT);
         }
@@ -158,7 +158,7 @@ public class AnalysisPage extends BasePage {
                 card.setGravity(Gravity.CENTER_HORIZONTAL);
                 TextView mark = Ui.text(ctx(), "!", 22, Ui.RED, true);
                 mark.setGravity(Gravity.CENTER);
-                mark.setBackground(Ui.roundRect(Color.parseColor("#fef2f2"), 999, ctx()));
+                mark.setBackground(Ui.roundRect(Ui.RED_SOFT, 999, ctx()));
                 LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(Ui.dp(ctx(), 44), Ui.dp(ctx(), 44));
                 card.addView(mark, mlp);
                 TextView t = Ui.sectionTitle(ctx(), "暂时无法读取统计");
@@ -291,7 +291,7 @@ public class AnalysisPage extends BasePage {
         scoreBox.setLayoutParams(sblp);
         String scoreName = period.equals("week") ? "本周健康分" : (period.equals("month") ? "本月健康分" : "当月健康分");
         scoreBox.addView(Ui.text(ctx(), scoreName, 11, Ui.MUTED, true));
-        TextView scoreNum = Ui.text(ctx(), String.valueOf(score), 42, Ui.DEEP, true);
+        TextView scoreNum = Ui.text(ctx(), String.valueOf(score), 42, Ui.LIME, true);
         scoreBox.addView(scoreNum, Ui.matchWrap(2, ctx()));
         TextView scoreTag = Ui.chip(ctx(), Insights.scoreLabel(score), Ui.PRIMARY_DARK, Ui.GREEN_SOFT);
         scoreTag.setGravity(Gravity.CENTER);
@@ -528,7 +528,7 @@ public class AnalysisPage extends BasePage {
             TextView chip = Ui.text(ctx(), t[1], 11, active ? Ui.PRIMARY_DARK : Ui.SLATE, active);
             chip.setGravity(Gravity.CENTER);
             chip.setPadding(0, Ui.dp(ctx(), 8), 0, Ui.dp(ctx(), 8));
-            if (active) chip.setBackground(Ui.roundRect(Color.parseColor("#ecfdf5"), 10, ctx()));
+            if (active) chip.setBackground(Ui.roundRect(Ui.GREEN_SOFT, 10, ctx()));
             chip.setOnClickListener(v -> { chartTab = key; renderBody(); });
             tabBar.addView(chip, Ui.weight1());
         }
@@ -574,7 +574,7 @@ public class AnalysisPage extends BasePage {
 
     private void buildWeight(LinearLayout box) {
         cardHeader(box, "身体基线走势", "每天单独呈现，观察整体平稳曲线",
-                legendChips(new String[][]{{"#059669", "体重"}, {"#8b5cf6", "腰围"}}));
+                legendChips(new String[][]{{"#10b981", "体重"}, {"#a78bfa", "腰围"}}));
         JSONArray days = days();
         String start = summary.optString("start");
         String end = summary.optString("end");
@@ -644,7 +644,7 @@ public class AnalysisPage extends BasePage {
 
     private void buildSteps(LinearLayout box) {
         cardHeader(box, "每日步数走势", "日常步行活动量，基准线为 6,000 步活力线",
-                pill("6,000 步活力达标", Color.parseColor("#ecfdf5"), Ui.PRIMARY_DARK));
+                pill("6,000 步活力达标", Ui.GREEN_SOFT, Ui.PRIMARY_DARK));
         JSONArray days = days();
         int maxSteps = 10000;
         for (int i = 0; i < days.length(); i++) {
@@ -657,7 +657,7 @@ public class AnalysisPage extends BasePage {
             double h = Math.max(16, Math.min(180, Math.round(steps / (double) maxSteps * 180)));
             Bar b = new Bar();
             b.frac = (float) (h / 180.0);
-            b.color = steps >= 6000 ? Ui.PRIMARY : Color.parseColor("#cbd5e1");
+            b.color = steps >= 6000 ? Ui.PRIMARY : Color.parseColor("#454f45");
             b.topLabel = steps > 0 ? String.valueOf(steps) : "";
             String date = d.optString("record_date");
             b.bottomLabel = date.length() >= 10 ? date.substring(5) : date;
@@ -704,7 +704,7 @@ public class AnalysisPage extends BasePage {
 
     private void buildVitality(LinearLayout box) {
         cardHeader(box, "作息与运动复盘", "观察睡眠时长与运动安排的节律配合",
-                legendChips(new String[][]{{"#8b5cf6", "睡眠(h)"}, {"#0ea5e9", "运动(min)"}}));
+                legendChips(new String[][]{{"#a78bfa", "睡眠(h)"}, {"#38bdf8", "运动(min)"}}));
         JSONArray days = days();
         LinearLayout list = Ui.column(ctx());
         for (int i = 0; i < days.length(); i++) {
@@ -741,7 +741,7 @@ public class AnalysisPage extends BasePage {
     /** 横向比例条: 轨道 + 填充 (用 LinearLayout 权重实现百分比宽度) */
     private LinearLayout trackBar(double pct, int color) {
         LinearLayout track = Ui.row(ctx());
-        track.setBackground(Ui.roundRect(Color.parseColor("#f1f5f9"), 4, ctx()));
+        track.setBackground(Ui.roundRect(Color.parseColor("#242b24"), 4, ctx()));
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(ctx(), 8));
         track.setLayoutParams(tlp);
@@ -991,7 +991,7 @@ public class AnalysisPage extends BasePage {
                 canvas.drawPath(path, barPaint);
                 textPaint.setTextAlign(Paint.Align.CENTER);
                 if (b.topLabel != null && !b.topLabel.isEmpty()) {
-                    textPaint.setColor(b.color == Color.parseColor("#cbd5e1") ? Ui.SLATE : b.color);
+                    textPaint.setColor(b.color == Color.parseColor("#454f45") ? Ui.SLATE : b.color);
                     canvas.drawText(b.topLabel, cx, top - 4 * density, textPaint);
                 }
                 textPaint.setColor(Ui.MUTED);

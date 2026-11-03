@@ -127,16 +127,47 @@ public class ApiClient {
     }
 
     private JSONObject agentChatSync(JSONObject body, boolean retry) throws Exception {
+        return agentCallSync("/api/v1/agent/chat", "POST", body, retry);
+    }
+
+    /** 读取本周 AI 计划 (GET /api/v1/agent/plan): Worker 有缓存时直返, 无缓存返回 404 */
+    public void agentGetPlan(Callback cb) {
+        executor.execute(() -> {
+            try {
+                JSONObject data = agentCallSync("/api/v1/agent/plan", "GET", null, true);
+                main.post(() -> cb.onOk(data, 200));
+            } catch (Exception e) {
+                main.post(() -> cb.onError(friendly(e)));
+            }
+        });
+    }
+
+    /** 生成本周 AI 计划 (POST /api/v1/agent/plan): context 为数据摘要, force=true 忽略缓存重生成 */
+    public void agentPlan(String context, boolean force, Callback cb) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("context", context == null ? "" : context);
+                body.put("force", force);
+                JSONObject data = agentCallSync("/api/v1/agent/plan", "POST", body, true);
+                main.post(() -> cb.onOk(data, 200));
+            } catch (Exception e) {
+                main.post(() -> cb.onError(friendly(e)));
+            }
+        });
+    }
+
+    /** 智能体域通用调用: 独立会话 + 401 重建重试一次 + 60 秒读超时 (大模型生成较慢) */
+    private JSONObject agentCallSync(String path, String method, JSONObject body, boolean retry) throws Exception {
         ensureAgentSession();
         try {
-            // 大模型生成可能较慢, 单独放宽读取超时
-            String text = rawRequestTo(AGENT_BASE, "/api/v1/agent/chat", "POST", body, getAgentToken(), 60000);
+            String text = rawRequestTo(AGENT_BASE, path, method, body, getAgentToken(), 60000);
             return new JSONObject(text);
         } catch (HttpError e) {
             if (e.status == 401 && retry) {
                 prefs.edit().remove(AGENT_TOKEN_KEY).apply();
                 ensureAgentSession();
-                return agentChatSync(body, false);
+                return agentCallSync(path, method, body, false);
             }
             throw e;
         }
