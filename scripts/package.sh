@@ -6,8 +6,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$ROOT/dist}"
 VERSION="$(date +%Y%m%d)-$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null || echo dev)"
-mkdir -p "$OUT"
 cd "$ROOT"
+mkdir -p "$OUT"
+# 转成绝对路径: 后面会 cd 到 /tmp 暂存目录打包, 相对路径会写错位置 (CI 首次运行就是栽在这里)
+OUT="$(cd "$OUT" && pwd)"
 
 # 小程序包: 微信开发者工具可直接导入 (根 project.config.json 已指向 miniprogram/)
 rm -rf /tmp/wt-mini && mkdir -p /tmp/wt-mini
