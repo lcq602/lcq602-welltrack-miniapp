@@ -21,7 +21,9 @@ import org.json.JSONObject;
 import java.util.HashMap;
 import java.util.Map;
 
+import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
+import art.qelora.welltrack.health.Insights;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
@@ -84,20 +86,21 @@ public class MinePage extends BasePage {
         head.addView(heroPill);
         content.addView(head);
 
-        // Hero 卡片
+        // Hero 卡片 (v2: 深绿渐变主视觉, 白字)
         LinearLayout hero = Ui.card(ctx());
+        hero.setBackground(Ui.heroGradient(ctx()));
         LinearLayout heroRow = Ui.row(ctx());
         FrameLayout avatar = new FrameLayout(ctx());
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(Ui.dp(ctx(), 54), Ui.dp(ctx(), 54));
         avatar.setLayoutParams(alp);
         TextView avatarBg = Ui.text(ctx(), "W", 22, Color.WHITE, true);
         avatarBg.setGravity(Gravity.CENTER);
-        avatarBg.setBackground(Ui.primaryGradient(ctx()));
+        avatarBg.setBackground(Ui.roundRect(Color.parseColor("#33ffffff"), 999, ctx()));
         avatar.addView(avatarBg, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        TextView badge = Ui.text(ctx(), "✓", 9, Color.WHITE, true);
+        TextView badge = Ui.text(ctx(), "✓", 9, Ui.DEEP, true);
         badge.setGravity(Gravity.CENTER);
-        badge.setBackground(Ui.roundRect(Ui.PRIMARY_DARK, 999, ctx()));
+        badge.setBackground(Ui.roundRect(Color.WHITE, 999, ctx()));
         FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(Ui.dp(ctx(), 16), Ui.dp(ctx(), 16));
         blp.gravity = Gravity.BOTTOM | Gravity.END;
         avatar.addView(badge, blp);
@@ -105,9 +108,9 @@ public class MinePage extends BasePage {
         LinearLayout meta = Ui.column(ctx());
         LinearLayout.LayoutParams mlp = Ui.weight1();
         mlp.leftMargin = Ui.dp(ctx(), 12);
-        heroName = Ui.text(ctx(), "正在加载资料…", 15, Ui.INK, true);
+        heroName = Ui.text(ctx(), "正在加载资料…", 15, Color.WHITE, true);
         meta.addView(heroName);
-        heroDesc = Ui.text(ctx(), "", 12, Ui.MUTED, false);
+        heroDesc = Ui.text(ctx(), "", 12, Color.parseColor("#c8f2df"), false);
         meta.addView(heroDesc, Ui.matchWrap(4, ctx()));
         heroRow.addView(meta, mlp);
         hero.addView(heroRow);
@@ -115,15 +118,8 @@ public class MinePage extends BasePage {
 
         // 基础体征卡片
         LinearLayout baseline = Ui.card(ctx());
-        LinearLayout bHead = Ui.row(ctx());
-        LinearLayout bLeft = Ui.column(ctx());
-        bLeft.addView(Ui.text(ctx(), "PERSONAL BASELINE", 10, Ui.MUTED, true));
-        bLeft.addView(Ui.sectionTitle(ctx(), "基础体征与目标"), Ui.matchWrap(3, ctx()));
-        bHead.addView(bLeft, Ui.weight1());
-        TextView adjust = pill("调整计划 ›", Color.parseColor("#ecfdf5"), Ui.PRIMARY_DARK);
-        adjust.setOnClickListener(v -> activity().switchTab(1));
-        bHead.addView(adjust);
-        baseline.addView(bHead);
+        baseline.addView(Ui.sectionHeader(ctx(), "基础体征与目标", "调整计划 ›",
+                v -> activity().switchTab(1)));
         baselineBox = Ui.column(ctx());
         baseline.addView(baselineBox, Ui.matchWrap(12, ctx()));
         baselineNote = Ui.text(ctx(), "💡 当前体重已通过小米运动健康自动同步；初始计划基线保持稳定。",
@@ -358,7 +354,7 @@ public class MinePage extends BasePage {
 
     private LinearLayout baselineTile(String label, String value, String unit) {
         LinearLayout tile = Ui.column(ctx());
-        tile.setBackground(Ui.roundRect(Color.parseColor("#f8fafc"), 12, ctx()));
+        tile.setBackground(Ui.roundRect(Ui.SOFT, 16, ctx()));
         int p = Ui.dp(ctx(), 12);
         tile.setPadding(p, p, p, p);
         tile.addView(Ui.text(ctx(), label, 11, Ui.MUTED, false));
@@ -399,19 +395,20 @@ public class MinePage extends BasePage {
     /* ---- 已连接 ---- */
 
     private void buildMiConnected() {
-        String[][] metrics = {
-                {"weight", "最近体重", "kg"},
-                {"sleep_hours", "最近睡眠", "h"},
-                {"steps", "最近步数", "步"},
-                {"calories", "能量消耗", "kcal"},
-                {"workout_minutes", "运动时长", "min"},
+        // key, 标签, 单位, 图标, 主色, 浅底, 达标目标 (<=0 表示不画进度条)
+        Object[][] metrics = {
+                {"weight", "最近体重", "kg", "⚖️", Ui.PRIMARY, Ui.GREEN_SOFT, -1.0},
+                {"sleep_hours", "最近睡眠", "h", "🌙", Ui.SLEEP, Ui.SLEEP_SOFT, Insights.SLEEP_GOAL},
+                {"steps", "最近步数", "步", "👟", Ui.PRIMARY, Ui.GREEN_SOFT, (double) Insights.STEP_GOAL},
+                {"calories", "能量消耗", "kcal", "🔥", Ui.CAL, Ui.CAL_SOFT, (double) Insights.CAL_GOAL},
+                {"workout_minutes", "运动时长", "min", "🏃", Ui.MOVE, Ui.MOVE_SOFT, (double) Insights.WORKOUT_GOAL},
         };
         for (int i = 0; i < metrics.length; i += 2) {
             LinearLayout row = Ui.row(ctx());
             row.setGravity(Gravity.TOP);
-            row.addView(metricCard(metrics[i]), Ui.weight1());
+            row.addView(miTile(metrics[i]), Ui.weight1());
             row.addView(spacerW(10));
-            if (i + 1 < metrics.length) row.addView(metricCard(metrics[i + 1]), Ui.weight1());
+            if (i + 1 < metrics.length) row.addView(miTile(metrics[i + 1]), Ui.weight1());
             else row.addView(new View(ctx()), Ui.weight1());
             miBox.addView(row, i == 0 ? new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -443,32 +440,27 @@ public class MinePage extends BasePage {
         miBox.addView(unbindBtn, Ui.matchWrap(10, ctx()));
     }
 
-    private LinearLayout metricCard(String[] metric) {
-        JSONObject item = miLatest.optJSONObject(metric[0]);
-        LinearLayout card = Ui.column(ctx());
-        card.setBackground(Ui.roundRect(Color.parseColor("#f8fafc"), 12, ctx()));
-        int p = Ui.dp(ctx(), 10);
-        card.setPadding(p, p, p, p);
-        LinearLayout head = Ui.row(ctx());
-        head.addView(Ui.text(ctx(), metric[1], 11, Ui.MUTED, false), Ui.weight1());
-        head.addView(Ui.text(ctx(), item == null ? "暂无记录" : item.optString("date_label", "暂无记录"),
-                10, Ui.MUTED, false));
-        card.addView(head);
-        LinearLayout valRow = Ui.row(ctx());
+    /** 已连接指标瓷砖 (Ui.metricTile 风格): 数值 + 单位·日期副文案 + 达标进度条 */
+    private LinearLayout miTile(Object[] def) {
+        JSONObject item = miLatest.optJSONObject((String) def[0]);
         boolean hasValue = item != null && !item.isNull("value");
-        valRow.addView(Ui.text(ctx(), item == null ? "暂无" : item.optString("value_label", "暂无"),
-                17, Ui.INK, true));
-        if (hasValue) valRow.addView(Ui.text(ctx(), " " + metric[2], 11, Ui.MUTED, false));
-        card.addView(valRow, Ui.matchWrap(4, ctx()));
-        return card;
+        String value = hasValue ? item.optString("value_label", "暂无") : "暂无";
+        String dateLabel = item == null ? "暂无记录" : item.optString("date_label", "暂无记录");
+        String sub = def[2] + " · " + dateLabel;
+        double goal = (Double) def[6];
+        double ratio = (hasValue && goal > 0) ? item.optDouble("value", 0) / goal : -1;
+        return Ui.metricTile(ctx(), (Integer) def[4], (Integer) def[5], (String) def[3],
+                (String) def[1], value, sub, ratio);
     }
 
     /* ---- 未连接表单 ---- */
 
     private void buildMiForm() {
+        // 未连接引导横幅 (手机 + 手环插画)
+        miBox.addView(Ui.bannerImage(ctx(), R.drawable.img_connect, 120, 16));
         TextView intro = Ui.text(ctx(), "登录凭证仅发送给本机安全后端用于换取会话；小程序绝不保存密码。",
                 12, Ui.MUTED, false);
-        miBox.addView(intro);
+        miBox.addView(intro, Ui.matchWrap(12, ctx()));
 
         if (miChallenge != null) {
             boolean email = "Email".equals(miChallenge.optString("method"));

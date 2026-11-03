@@ -26,6 +26,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import art.qelora.welltrack.api.ApiClient;
+import art.qelora.welltrack.health.Insights;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
@@ -35,12 +36,13 @@ import art.qelora.welltrack.ui.Ui;
  * 图表数据计算与 analysis.js 的 buildChart / stepBars / calBars / vitalityRows 等价。
  */
 public class AnalysisPage extends BasePage {
-    private static final int PURPLE = Color.parseColor("#7c3aed");
-    private static final int PURPLE_SOFT = Color.parseColor("#f5f3ff");
-    private static final int AMBER = Color.parseColor("#d97706");
-    private static final int AMBER_BAR = Color.parseColor("#f59e0b");
-    private static final int AMBER_SOFT = Color.parseColor("#fffbeb");
-    private static final int BLUE = Color.parseColor("#2563eb");
+    // v2 指标专属色: 睡眠紫 / 消耗橙 / 运动蓝 (与 Ui 指标色体系对齐)
+    private static final int PURPLE = Ui.SLEEP;
+    private static final int PURPLE_SOFT = Ui.SLEEP_SOFT;
+    private static final int AMBER = Ui.CAL;
+    private static final int AMBER_BAR = Ui.CAL;
+    private static final int AMBER_SOFT = Ui.CAL_SOFT;
+    private static final int BLUE = Ui.MOVE;
 
     private String period = "week";
     private String chartTab = "weight";
@@ -198,19 +200,21 @@ public class AnalysisPage extends BasePage {
         }
         body.addView(rangeRow);
 
+        body.addView(insightsCard(), Ui.matchWrap(14, ctx()));
+
         buildBento();
 
         if (period.equals("calendar")) {
-            body.addView(calendarCard(), Ui.matchWrap(14, ctx()));
+            body.addView(calendarCard(), Ui.matchWrap(18, ctx()));
         } else {
-            body.addView(trendCard(), Ui.matchWrap(14, ctx()));
+            body.addView(trendCard(), Ui.matchWrap(18, ctx()));
         }
 
         TextView foot = Ui.text(ctx(),
                 "数据来自手环自动同步与手工日常记录，用于长期生活节律复盘，不构成临床医疗诊断。",
                 11, Ui.MUTED, false);
         foot.setGravity(Gravity.CENTER);
-        body.addView(foot, Ui.matchWrap(14, ctx()));
+        body.addView(foot, Ui.matchWrap(18, ctx()));
     }
 
     private TextView pill(String text, int bg, int fg) {
@@ -220,12 +224,136 @@ public class AnalysisPage extends BasePage {
         return t;
     }
 
+    /* ---------------- 健康分析 (Insights 规则引擎) ---------------- */
+
+    /**
+     * 健康分析主卡: 用所选周期的日均数据组装 Insights.Day 算健康分,
+     * Week 由 analytics 的 days 数组计算 (运动天数、周期内体重首尾差),
+     * 给出可执行的锻炼/作息建议 (最多 3 条)。todayPlan 传 null (本页无周计划上下文)。
+     */
+    private LinearLayout insightsCard() {
+        LinearLayout card = Ui.card(ctx());
+        card.addView(Ui.sectionHeader(ctx(), "健康分析", null, null));
+
+        JSONArray days = days();
+        double avgSteps = summary.optDouble("average_steps", 0);
+        double avgCals = summary.optDouble("average_calories", 0);
+        double avgSleep = summary.isNull("average_sleep") ? 0 : summary.optDouble("average_sleep", 0);
+        long span = Math.max(1, epochDay(summary.optString("end")) - epochDay(summary.optString("start")) + 1);
+        double avgWorkout = summary.optDouble("exercise_minutes", 0) / span;
+
+        boolean hasData = days.length() > 0 || avgSteps > 0 || avgCals > 0 || avgSleep > 0
+                || summary.optDouble("exercise_minutes", 0) > 0;
+        if (!hasData) {
+            TextView empty = Ui.text(ctx(),
+                    "这一周期还没有同步到健康数据。连接小米运动健康并完成一次同步后，这里会生成你的健康分和锻炼建议。",
+                    13, Ui.SLATE, false);
+            card.addView(empty, Ui.matchWrap(10, ctx()));
+            return card;
+        }
+
+        Insights.Day day = new Insights.Day();
+        day.steps = (int) Math.round(avgSteps);
+        day.calories = (int) Math.round(avgCals);
+        day.sleepHours = avgSleep;
+        day.workoutMinutes = (int) Math.round(avgWorkout);
+        int score = Insights.score(day);
+
+        Insights.Week week = new Insights.Week();
+        week.avgSteps = avgSteps;
+        week.avgSleep = avgSleep;
+        int workoutDays = 0;
+        Double firstWeight = null, lastWeight = null;
+        for (int i = 0; i < days.length(); i++) {
+            JSONObject d = days.optJSONObject(i);
+            if (d == null) continue;
+            if (d.optDouble("workout_minutes", 0) > 0) workoutDays++;
+            if (!d.isNull("weight")) {
+                if (firstWeight == null) firstWeight = d.optDouble("weight");
+                lastWeight = d.optDouble("weight");
+            }
+        }
+        week.workoutDays = workoutDays;
+        week.workoutMinutes = (int) Math.round(summary.optDouble("exercise_minutes", 0));
+        week.weightChange7d = (firstWeight != null && lastWeight != null)
+                ? lastWeight - firstWeight : Double.NaN;
+        week.hasData = true;
+
+        List<Insights.Insight> recs = Insights.recommendations(day, week, null);
+
+        LinearLayout row = Ui.row(ctx());
+        row.setGravity(Gravity.TOP);
+
+        // 左侧: 大号健康分
+        LinearLayout scoreBox = Ui.column(ctx());
+        scoreBox.setGravity(Gravity.CENTER_HORIZONTAL);
+        LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(Ui.dp(ctx(), 104), ViewGroup.LayoutParams.WRAP_CONTENT);
+        scoreBox.setLayoutParams(sblp);
+        String scoreName = period.equals("week") ? "本周健康分" : (period.equals("month") ? "本月健康分" : "当月健康分");
+        scoreBox.addView(Ui.text(ctx(), scoreName, 11, Ui.MUTED, true));
+        TextView scoreNum = Ui.text(ctx(), String.valueOf(score), 42, Ui.DEEP, true);
+        scoreBox.addView(scoreNum, Ui.matchWrap(2, ctx()));
+        TextView scoreTag = Ui.chip(ctx(), Insights.scoreLabel(score), Ui.PRIMARY_DARK, Ui.GREEN_SOFT);
+        scoreTag.setGravity(Gravity.CENTER);
+        scoreBox.addView(scoreTag, Ui.matchWrap(4, ctx()));
+        if (avgCals > 0) {
+            TextView hint = Ui.text(ctx(), Insights.calorieHint((int) Math.round(avgCals)), 10.5f, Ui.MUTED, false);
+            hint.setGravity(Gravity.CENTER);
+            scoreBox.addView(hint, Ui.matchWrap(6, ctx()));
+        }
+        row.addView(scoreBox);
+
+        View divider = new View(ctx());
+        LinearLayout.LayoutParams dvlp = new LinearLayout.LayoutParams(1, Ui.dp(ctx(), 96));
+        dvlp.leftMargin = Ui.dp(ctx(), 12);
+        divider.setLayoutParams(dvlp);
+        divider.setBackgroundColor(Ui.BORDER);
+        row.addView(divider);
+
+        // 右侧: 建议列表 (前 3 条)
+        LinearLayout recBox = Ui.column(ctx());
+        if (recs.isEmpty()) {
+            recBox.addView(Ui.text(ctx(), "这一周期的数据还不多，先保持记录节奏，分析会越来越准。", 12.5f, Ui.SLATE, false));
+        } else {
+            int n = Math.min(3, recs.size());
+            for (int i = 0; i < n; i++) {
+                recBox.addView(insightRow(recs.get(i)), i == 0 ? new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        : Ui.matchWrap(10, ctx()));
+            }
+        }
+        LinearLayout.LayoutParams rblp = Ui.weight1();
+        rblp.leftMargin = Ui.dp(ctx(), 12);
+        row.addView(recBox, rblp);
+        card.addView(row, Ui.matchWrap(12, ctx()));
+        return card;
+    }
+
+    private LinearLayout insightRow(Insights.Insight ins) {
+        LinearLayout r = Ui.row(ctx());
+        r.setGravity(Gravity.TOP);
+        String icon;
+        switch (ins.level) {
+            case GOOD: icon = "✅"; break;
+            case WARN: icon = "⚠️"; break;
+            default: icon = "💡"; break;
+        }
+        r.addView(Ui.text(ctx(), icon, 14, Ui.INK, false));
+        LinearLayout texts = Ui.column(ctx());
+        texts.addView(Ui.text(ctx(), ins.title, 13, Ui.INK, true));
+        texts.addView(Ui.text(ctx(), ins.body, 12, Ui.SLATE, false), Ui.matchWrap(2, ctx()));
+        LinearLayout.LayoutParams tlp = Ui.weight1();
+        tlp.leftMargin = Ui.dp(ctx(), 8);
+        r.addView(texts, tlp);
+        return r;
+    }
+
     /* ---------------- 摘要 Bento ---------------- */
 
     private void buildBento() {
         String sleep = summary.isNull("average_sleep") ? "—" : fmtNum(summary.optDouble("average_sleep"));
         LinearLayout row1 = Ui.row(ctx());
-        row1.addView(bentoTile("累计步数", "👟", Color.parseColor("#ecfdf5"),
+        row1.addView(bentoTile("累计步数", "👟", Ui.GREEN_SOFT,
                 fmtInt(summary.optDouble("total_steps", 0)), "步",
                 "日均 " + fmtInt(summary.optDouble("average_steps", 0)) + " 步"), Ui.weight1());
         row1.addView(Ui.spacer(ctx(), 0), fixedW(10));
@@ -238,7 +366,7 @@ public class AnalysisPage extends BasePage {
         row2.addView(bentoTile("平均睡眠", "🌙", PURPLE_SOFT,
                 sleep, "h", "作息规律与身心恢复"), Ui.weight1());
         row2.addView(Ui.spacer(ctx(), 0), fixedW(10));
-        row2.addView(bentoTile("运动累计", "🏃", Ui.BLUE_SOFT,
+        row2.addView(bentoTile("运动累计", "🏃", Ui.MOVE_SOFT,
                 fmtInt(summary.optDouble("exercise_count", 0)), "次",
                 fmtNum(summary.optDouble("exercise_minutes", 0)) + " 分钟累计"), Ui.weight1());
         body.addView(row2, Ui.matchWrap(10, ctx()));
@@ -276,7 +404,7 @@ public class AnalysisPage extends BasePage {
         String[] ym = calendarMonth.split("-");
         int year = Integer.parseInt(ym[0]);
         int month = Integer.parseInt(ym[1]);
-        head.addView(Ui.sectionTitle(ctx(), year + " 年 " + month + " 月"), Ui.weight1());
+        head.addView(Ui.sectionHeader(ctx(), year + " 年 " + month + " 月", null, null), Ui.weight1());
         head.addView(navBtn("‹", -1));
         head.addView(navBtn("›", 1));
         card.addView(head);
@@ -420,7 +548,7 @@ public class AnalysisPage extends BasePage {
     private void cardHeader(LinearLayout box, String title, String subtitle, View right) {
         LinearLayout head = Ui.row(ctx());
         LinearLayout left = Ui.column(ctx());
-        left.addView(Ui.sectionTitle(ctx(), title));
+        left.addView(Ui.sectionHeader(ctx(), title, null, null));
         left.addView(Ui.text(ctx(), subtitle, 11, Ui.MUTED, false), Ui.matchWrap(3, ctx()));
         head.addView(left, Ui.weight1());
         if (right != null) head.addView(right);
@@ -446,7 +574,7 @@ public class AnalysisPage extends BasePage {
 
     private void buildWeight(LinearLayout box) {
         cardHeader(box, "身体基线走势", "每天单独呈现，观察整体平稳曲线",
-                legendChips(new String[][]{{"#059669", "体重"}, {"#7c3aed", "腰围"}}));
+                legendChips(new String[][]{{"#059669", "体重"}, {"#8b5cf6", "腰围"}}));
         JSONArray days = days();
         String start = summary.optString("start");
         String end = summary.optString("end");
@@ -576,7 +704,7 @@ public class AnalysisPage extends BasePage {
 
     private void buildVitality(LinearLayout box) {
         cardHeader(box, "作息与运动复盘", "观察睡眠时长与运动安排的节律配合",
-                legendChips(new String[][]{{"#7c3aed", "睡眠(h)"}, {"#2563eb", "运动(min)"}}));
+                legendChips(new String[][]{{"#8b5cf6", "睡眠(h)"}, {"#0ea5e9", "运动(min)"}}));
         JSONArray days = days();
         LinearLayout list = Ui.column(ctx());
         for (int i = 0; i < days.length(); i++) {

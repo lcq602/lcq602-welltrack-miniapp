@@ -14,7 +14,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -25,24 +24,32 @@ import org.json.JSONObject;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
+import art.qelora.welltrack.health.Insights;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
+import art.qelora.welltrack.ui.VitalityRings;
 
 /**
- * 首页 (对应小程序 pages/index): 未配置时是建立健康起点表单,
- * 已配置时是仪表盘 (状态 Hero / BMI 与打卡 / 小米活力 / 今日待办 / 7 天趋势 / 探索卡片)。
+ * 首页 v2 (对应小程序 pages/index, 视觉与功能重构版):
+ * 产品主线 = 小米运动健康数据: 活力三环 + 今日健康分 + 消耗达标 + 健康洞察与锻炼建议 + 每日体重。
+ * 结构: 问候 → 主视觉横幅 → 活力卡 (三环/健康分/达标文案) → 今日指标 2×2 → 健康洞察 →
+ *       体重卡 → 今日待办 → 7 天体重波动。未连接小米时活力区换成连接引导卡。
  * 数据: GET /api/v1/dashboard; 建档: POST /api/v1/profile; 同步: POST /api/v1/integrations/mihealth/sync。
  */
 public class IndexPage extends BasePage {
     private static final String[] GOAL_KEYS = {"weight_loss", "fat_loss", "maintenance", "healthy_habits"};
     private static final String[] GOAL_LABELS = {"减重", "减脂", "维持", "健康习惯"};
     private static final String[] WEEKDAYS = {"日", "一", "二", "三", "四", "五", "六"};
+    private static final String[] PLAN_KEYS_BY_DOW = {"sun", "mon", "tue", "wed", "thu", "fri", "sat"};
 
     private LinearLayout body;
 
@@ -70,9 +77,14 @@ public class IndexPage extends BasePage {
     private int goalProgressVal = 0;
     private boolean showGoalProgress = true;
     private String progressLabel = "目标进度";
-    private int stepProgress = 0, calProgress = 0;
     private JSONObject mihealth, miToday;
     private final List<String> todos = new ArrayList<>();
+
+    // v2 洞察引擎输入 (today 取 mihealth 当日, week 由近 7 天 records 计算)
+    private final Insights.Day todayDay = new Insights.Day();
+    private final Insights.Week weekStats = new Insights.Week();
+    private String todayPlan = null;
+    private boolean miConnected = false;
 
     // 建档表单状态
     private String fHeight = "", fCurrent = "", fTarget = "", fStartDate = "", fTargetDate = "";
@@ -137,6 +149,7 @@ public class IndexPage extends BasePage {
         JSONArray records = data.optJSONArray("records");
         Map<String, Double> weightByDate = new HashMap<>();
         Map<String, Boolean> recordByDate = new HashMap<>();
+        Map<String, JSONObject> recordMap = new HashMap<>();
         List<Double> values = new ArrayList<>();
         if (records != null) {
             for (int i = 0; i < records.length(); i++) {
@@ -145,6 +158,7 @@ public class IndexPage extends BasePage {
                 String d = r.optString("record_date", "");
                 Double w = num(r, "weight");
                 recordByDate.put(d, Boolean.TRUE);
+                recordMap.put(d, r);
                 weightByDate.put(d, w);
                 if (w != null) values.add(w);
             }
@@ -158,11 +172,13 @@ public class IndexPage extends BasePage {
         todayFullLabel = (now.get(Calendar.MONTH) + 1) + "月" + now.get(Calendar.DAY_OF_MONTH)
                 + "日 周" + WEEKDAYS[now.get(Calendar.DAY_OF_WEEK) - 1];
         trend.clear();
+        List<String> windowDates = new ArrayList<>();
         for (int i = 0; i < 7; i++) {
             Calendar c = Calendar.getInstance();
             c.add(Calendar.DAY_OF_YEAR, -(6 - i));
             String ds = String.format(Locale.US, "%04d-%02d-%02d",
                     c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH));
+            windowDates.add(ds);
             TrendDay t = new TrendDay();
             t.recordDate = ds;
             t.weekday = WEEKDAYS[c.get(Calendar.DAY_OF_WEEK) - 1];
@@ -211,19 +227,80 @@ public class IndexPage extends BasePage {
         goalProgressVal = Math.min(100, Math.max(0, rawProgress));
         showGoalProgress = !"maintenance".equals(goal);
         progressLabel = "healthy_habits".equals(goal) ? "近7天记录覆盖" : "目标进度";
+        // 今日周计划 (洞察建议用)
+        todayPlan = null;
+        if (profile != null) {
+            JSONObject weekly = profile.optJSONObject("weekly_plan");
+            if (weekly != null) {
+                String v = weekly.optString(PLAN_KEYS_BY_DOW[now.get(Calendar.DAY_OF_WEEK) - 1], "");
+                if (v != null && !v.isEmpty() && !"null".equals(v)) todayPlan = v;
+            }
+        }
         // 小米活力
         mihealth = data.optJSONObject("mihealth");
         if (mihealth == null) mihealth = new JSONObject();
         miToday = mihealth.optJSONObject("today");
         if (miToday == null) miToday = new JSONObject();
-        int steps = miToday.optInt("steps", 0);
-        double cals = miToday.optDouble("calories", 0);
-        stepProgress = Math.min(100, (int) Math.round(steps / 8000.0 * 100));
-        calProgress = Math.min(100, (int) Math.round(cals / 400.0 * 100));
+        miConnected = mihealth.optBoolean("connected", false);
+        // 洞察引擎: 今日值
+        todayDay.steps = miToday.optInt("steps", 0);
+        todayDay.calories = (int) Math.round(miToday.optDouble("calories", 0));
+        Double sl = num(miToday, "sleep_hours");
+        todayDay.sleepHours = sl != null ? sl : 0;
+        todayDay.workoutMinutes = (int) Math.round(miToday.optDouble("workout_minutes", 0));
+        // 洞察引擎: 近 7 天统计 (与 trend 同一窗口与口径)
+        computeWeekStats(windowDates, recordMap);
         // 待办
         todos.clear();
         JSONArray td = data.optJSONArray("todos");
         if (td != null) for (int i = 0; i < td.length(); i++) todos.add(td.optString(i, ""));
+    }
+
+    private void computeWeekStats(List<String> windowDates, Map<String, JSONObject> recordMap) {
+        weekStats.avgSteps = 0;
+        weekStats.avgSleep = 0;
+        weekStats.workoutDays = 0;
+        weekStats.workoutMinutes = 0;
+        weekStats.weightChange7d = Double.NaN;
+        weekStats.hasData = false;
+        double stepsSum = 0; int stepsDays = 0;
+        double sleepSum = 0; int sleepDays = 0;
+        List<JSONObject> inWindow = new ArrayList<>();
+        for (String ds : windowDates) {
+            JSONObject r = recordMap.get(ds);
+            if (r != null) inWindow.add(r);
+        }
+        Collections.sort(inWindow, new Comparator<JSONObject>() {
+            @Override public int compare(JSONObject a, JSONObject b) {
+                return a.optString("record_date", "").compareTo(b.optString("record_date", ""));
+            }
+        });
+        Double firstWeight = null, lastWeight = null;
+        for (JSONObject r : inWindow) {
+            weekStats.hasData = true;
+            Double st = num(r, "steps");
+            if (st != null) { stepsSum += st; stepsDays++; }
+            Double sh = num(r, "sleep_hours");
+            if (sh != null && sh > 0) { sleepSum += sh; sleepDays++; }
+            Double wm = num(r, "workout_minutes");
+            if (wm != null && wm > 0) {
+                weekStats.workoutDays++;
+                weekStats.workoutMinutes += (int) Math.round(wm);
+            }
+            Double w = num(r, "weight");
+            if (w != null) {
+                if (firstWeight == null) firstWeight = w;
+                lastWeight = w;
+            }
+        }
+        if (stepsDays > 0) weekStats.avgSteps = stepsSum / stepsDays;
+        if (sleepDays > 0) weekStats.avgSleep = sleepSum / sleepDays;
+        if (firstWeight != null && lastWeight != null && inWindow.size() > 0
+                && !firstWeight.equals(lastWeight)) {
+            weekStats.weightChange7d = Math.round((lastWeight - firstWeight) * 10.0) / 10.0;
+        } else if (firstWeight != null && lastWeight != null) {
+            weekStats.weightChange7d = 0;
+        }
     }
 
     private void syncMiHealth() {
@@ -258,8 +335,12 @@ public class IndexPage extends BasePage {
             return;
         }
         renderHead();
-        if (!configured) renderSetupForm();
-        else renderDashboard();
+        if (!configured) {
+            body.addView(Ui.bannerImage(ctx(), R.drawable.img_connect, 150, 24), Ui.matchWrap(14, ctx()));
+            renderSetupForm();
+        } else {
+            renderDashboard();
+        }
     }
 
     private void renderLoading() {
@@ -425,240 +506,157 @@ public class IndexPage extends BasePage {
         }
     }
 
-    /* ---- 已配置: 仪表盘 ---- */
+    /* ---- 已配置: 仪表盘 v2 ---- */
 
     private void renderDashboard() {
-        renderHero();
-        renderBento();
-        renderVitality();
-        renderActions();
-        renderTrendCard();
-        renderJourney();
+        // 2) 主视觉横幅 (纯图, 不叠字)
+        body.addView(Ui.bannerImage(ctx(), R.drawable.hero_home, 150, 24), Ui.matchWrap(14, ctx()));
+
+        if (miConnected) {
+            // 3) 活力卡
+            body.addView(renderVitalityCard(), Ui.matchWrap(18, ctx()));
+            // 4) 今日指标 2×2
+            body.addView(renderMetricTiles(), Ui.matchWrap(18, ctx()));
+            // 5) 健康洞察
+            LinearLayout insights = renderInsightsCard();
+            if (insights != null) body.addView(insights, Ui.matchWrap(18, ctx()));
+        } else {
+            // 未连接小米: 连接引导卡替代活力区
+            body.addView(renderConnectCard(), Ui.matchWrap(18, ctx()));
+        }
+
+        // 6) 体重卡
+        body.addView(renderWeightCard(), Ui.matchWrap(18, ctx()));
+        // 7) 今日待办
+        body.addView(renderActionsCard(), Ui.matchWrap(18, ctx()));
+        // 8) 7 天体重波动
+        body.addView(renderTrendCard(), Ui.matchWrap(18, ctx()));
+
         TextView dis = Ui.text(ctx(), "BMI 与数据记录用于健康自我管理，不构成医疗诊断或特定减重速度承诺。", 11, Ui.MUTED, false);
         body.addView(dis, Ui.matchWrap(14, ctx()));
     }
 
-    private void renderHero() {
+    /* 活力卡: 三环 + 今日健康分 + 三项图例 + 消耗达标横条; 右上角保留小米同步按钮 */
+    private LinearLayout renderVitalityCard() {
         LinearLayout card = Ui.card(ctx());
-        LinearLayout top = Ui.row(ctx());
-        LinearLayout left = Ui.column(ctx());
-        left.addView(Ui.label(ctx(), "当前状态"));
-        TextView goalPill = pill("✳ " + goalLabelText, Color.parseColor("#d1fae5"), Ui.PRIMARY);
-        LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        gp.topMargin = Ui.dp(ctx(), 6);
-        left.addView(goalPill, gp);
-        top.addView(left, Ui.weight1());
-        String hint = "目标 " + fmt(num(data, "target_weight")) + " kg"
-                + (remainingWeight.isEmpty() ? "" : " · " + remainingWeight);
-        TextView hintTv = Ui.text(ctx(), hint, 12, Ui.SLATE, false);
-        hintTv.setGravity(Gravity.RIGHT);
-        top.addView(hintTv);
-        card.addView(top);
+        LinearLayout head = Ui.row(ctx());
+        LinearLayout titles = Ui.column(ctx());
+        titles.addView(Ui.sectionTitle(ctx(), "小米运动健康 · 今日活力"));
+        String synced = mihealth.optString("last_synced_at", "");
+        String sub = (synced != null && !synced.isEmpty() && !"null".equals(synced))
+                ? "数据已同步于 " + synced : "今日活力数据已就绪";
+        titles.addView(Ui.text(ctx(), sub, 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
+        head.addView(titles, Ui.weight1());
+        android.widget.Button refresh = Ui.ghostButton(ctx(), syncing ? "同步中…" : "⚡ 同步");
+        refresh.setEnabled(!syncing);
+        refresh.setOnClickListener(v -> syncMiHealth());
+        head.addView(refresh);
+        card.addView(head);
 
         LinearLayout main = Ui.row(ctx());
-        LinearLayout weightCol = Ui.column(ctx());
-        LinearLayout wRow = Ui.row(ctx());
-        wRow.addView(Ui.text(ctx(), fmt(num(data, "current_weight")), 34, Ui.INK, true));
-        TextView unit = Ui.text(ctx(), " kg", 16, Ui.SLATE, false);
-        wRow.addView(unit);
-        if (!diffLabel.isEmpty()) {
-            TextView dp2 = pill(diffLabel, Ui.BLUE_SOFT, Color.parseColor("#2563eb"));
-            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            dl.leftMargin = Ui.dp(ctx(), 8);
-            wRow.addView(dp2, dl);
-        }
-        weightCol.addView(wRow);
-        boolean fromMi = "mihealth".equals(data.optString("current_weight_source", ""));
-        weightCol.addView(Ui.text(ctx(), fromMi ? "数据源自小米运动健康同步" : "持续记录，见证身体点滴变化",
-                12, Ui.MUTED, false), Ui.matchWrap(4, ctx()));
-        main.addView(weightCol, Ui.weight1());
-        if (showGoalProgress) {
-            LinearLayout gauge = Ui.column(ctx());
-            gauge.setGravity(Gravity.CENTER);
-            GradientDrawable ring = new GradientDrawable();
-            ring.setColor(Color.WHITE);
-            ring.setCornerRadius(Ui.dp(ctx(), 40));
-            ring.setStroke(Ui.dp(ctx(), 3), Ui.PRIMARY);
-            gauge.setBackground(ring);
-            TextView pct = Ui.text(ctx(), goalProgressVal + "%", 17, Ui.PRIMARY, true);
-            pct.setGravity(Gravity.CENTER);
-            gauge.addView(pct);
-            TextView gl = Ui.text(ctx(), "达成", 10, Ui.MUTED, false);
-            gl.setGravity(Gravity.CENTER);
-            gauge.addView(gl);
-            int sz = Ui.dp(ctx(), 76);
-            main.addView(gauge, new LinearLayout.LayoutParams(sz, sz));
-        }
-        card.addView(main, Ui.matchWrap(12, ctx()));
+        VitalityRings rings = new VitalityRings(ctx());
+        rings.setData(todayDay.steps / (double) Insights.STEP_GOAL,
+                todayDay.calories / (double) Insights.CAL_GOAL,
+                todayDay.workoutMinutes / (double) Insights.WORKOUT_GOAL);
+        int rsz = Ui.dp(ctx(), 148);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(rsz, rsz);
+        rlp.rightMargin = Ui.dp(ctx(), 14);
+        main.addView(rings, rlp);
 
-        if (showGoalProgress) {
-            card.addView(progressTrack(goalProgressVal, Ui.PRIMARY, 8), Ui.matchWrap(12, ctx()));
-        }
-        LinearLayout foot = Ui.row(ctx());
-        TextView fl = Ui.text(ctx(), progressLabel, 12, Ui.MUTED, false);
-        foot.addView(fl, Ui.weight1());
-        foot.addView(Ui.text(ctx(), goalProgressVal + "%", 12, Ui.PRIMARY, true));
-        card.addView(foot, Ui.matchWrap(8, ctx()));
-        body.addView(card, Ui.matchWrap(14, ctx()));
-    }
-
-    private void renderBento() {
-        LinearLayout grid = Ui.row(ctx());
-        // BMI 磁贴
-        LinearLayout bmiTile = Ui.card(ctx());
-        LinearLayout bh = Ui.row(ctx());
-        TextView bt = Ui.text(ctx(), "BMI 指数", 13, Ui.INK, true);
-        bh.addView(bt, Ui.weight1());
-        bh.addView(pill(bmiStatus, pillBg(bmiPillKind), pillFg(bmiPillKind)));
-        bmiTile.addView(bh);
-        bmiTile.addView(Ui.text(ctx(), fmt(num(data, "bmi")), 24, Ui.INK, true), Ui.matchWrap(8, ctx()));
-        bmiTile.addView(Ui.text(ctx(), "标准区间 18.5 ~ 23.9", 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
-        LinearLayout spectrum = Ui.row(ctx());
-        spectrum.addView(specSeg(Color.parseColor("#93c5fd"), 1f));
-        spectrum.addView(specSeg(Color.parseColor("#34d399"), 1.4f));
-        spectrum.addView(specSeg(Color.parseColor("#fbbf24"), 1f));
-        bmiTile.addView(spectrum, Ui.matchWrap(10, ctx()));
-        LinearLayout specLabels = Ui.row(ctx());
-        specLabels.addView(specLabel("偏瘦", Gravity.LEFT));
-        specLabels.addView(specLabel("● 正常", Gravity.CENTER));
-        specLabels.addView(specLabel("偏重", Gravity.RIGHT));
-        bmiTile.addView(specLabels, Ui.matchWrap(4, ctx()));
-        LinearLayout.LayoutParams lpA = Ui.weight1(); lpA.rightMargin = Ui.dp(ctx(), 6);
-        grid.addView(bmiTile, lpA);
-
-        // 打卡磁贴
-        LinearLayout streakTile = Ui.card(ctx());
-        LinearLayout sh = Ui.row(ctx());
-        TextView st = Ui.text(ctx(), "7天记录打卡", 13, Ui.INK, true);
-        sh.addView(st, Ui.weight1());
-        sh.addView(Ui.text(ctx(), "🔥", 14, Ui.INK, false));
-        streakTile.addView(sh);
-        LinearLayout valRow = Ui.row(ctx());
-        valRow.addView(Ui.text(ctx(), String.valueOf(data.optInt("record_days_7d", 0)), 24, Ui.INK, true));
-        valRow.addView(Ui.text(ctx(), "/7 天", 12, Ui.MUTED, false));
-        streakTile.addView(valRow, Ui.matchWrap(8, ctx()));
-        streakTile.addView(Ui.text(ctx(), "近7天有记录天数", 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
-        LinearLayout dots = Ui.row(ctx());
-        for (TrendDay t : trend) {
-            TextView dotTv = Ui.text(ctx(), t.hasRecord ? "✓" : "", 10, Color.WHITE, true);
-            dotTv.setGravity(Gravity.CENTER);
-            GradientDrawable circ = new GradientDrawable();
-            circ.setShape(GradientDrawable.OVAL);
-            circ.setColor(t.hasRecord ? Ui.PRIMARY : Ui.SOFT);
-            if (t.isToday) circ.setStroke(Ui.dp(ctx(), 2), Ui.PRIMARY_DARK);
-            dotTv.setBackground(circ);
-            int sz = Ui.dp(ctx(), 20);
-            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(sz, sz);
-            dl.rightMargin = Ui.dp(ctx(), 4);
-            dots.addView(dotTv, dl);
-        }
-        streakTile.addView(dots, Ui.matchWrap(10, ctx()));
-        LinearLayout.LayoutParams lpB = Ui.weight1(); lpB.leftMargin = Ui.dp(ctx(), 6);
-        grid.addView(streakTile, lpB);
-        body.addView(grid, Ui.matchWrap(12, ctx()));
-
-        // 运动活力宽磁贴
-        LinearLayout act = Ui.card(ctx());
-        LinearLayout row = Ui.row(ctx());
-        TextView iconBox = Ui.text(ctx(), "🏃", 20, Ui.INK, false);
-        iconBox.setGravity(Gravity.CENTER);
-        iconBox.setBackground(Ui.roundRect(Ui.BLUE_SOFT, 12, ctx()));
-        int isz = Ui.dp(ctx(), 44);
-        row.addView(iconBox, new LinearLayout.LayoutParams(isz, isz));
-        LinearLayout info = Ui.column(ctx());
-        LinearLayout titleRow = Ui.row(ctx());
-        titleRow.addView(Ui.text(ctx(), "运动活力", 14, Ui.INK, true));
-        TextView wk = pill("本周达标", Color.parseColor("#dbeafe"), Color.parseColor("#2563eb"));
-        LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(
+        LinearLayout right = Ui.column(ctx());
+        right.addView(Ui.label(ctx(), "今日健康分"));
+        LinearLayout scoreRow = Ui.row(ctx());
+        int score = Insights.score(todayDay);
+        scoreRow.addView(Ui.text(ctx(), String.valueOf(score), 34, Ui.INK, true));
+        TextView scoreUnit = Ui.text(ctx(), " 分", 13, Ui.SLATE, false);
+        scoreRow.addView(scoreUnit);
+        TextView labelChip = Ui.chip(ctx(), Insights.scoreLabel(score), Ui.DEEP, Ui.GREEN_SOFT);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        wl.leftMargin = Ui.dp(ctx(), 6);
-        titleRow.addView(wk, wl);
-        info.addView(titleRow);
-        int exCount = data.optInt("exercise_count_7d", 0);
-        info.addView(Ui.text(ctx(), "本周 " + exCount + " 次运动打卡", 12, Ui.SLATE, false), Ui.matchWrap(3, ctx()));
-        info.addView(Ui.text(ctx(), "坚持活动，提升日常心肺与代谢", 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
-        LinearLayout.LayoutParams il = Ui.weight1(); il.leftMargin = Ui.dp(ctx(), 10);
-        row.addView(info, il);
-        LinearLayout badge = Ui.column(ctx());
-        badge.setGravity(Gravity.CENTER);
-        TextView bn = Ui.text(ctx(), String.valueOf(exCount), 22, Ui.PRIMARY, true);
-        bn.setGravity(Gravity.CENTER);
-        badge.addView(bn);
-        TextView bu = Ui.text(ctx(), "次", 10, Ui.MUTED, false);
-        bu.setGravity(Gravity.CENTER);
-        badge.addView(bu);
-        row.addView(badge);
-        act.addView(row);
-        body.addView(act, Ui.matchWrap(12, ctx()));
+        clp.leftMargin = Ui.dp(ctx(), 8);
+        scoreRow.addView(labelChip, clp);
+        right.addView(scoreRow, Ui.matchWrap(2, ctx()));
+        right.addView(legendRow(Ui.PRIMARY, "步数",
+                fmt((double) todayDay.steps) + " / " + Insights.STEP_GOAL + " 步"), Ui.matchWrap(10, ctx()));
+        right.addView(legendRow(Ui.CAL, "消耗",
+                todayDay.calories + " / " + Insights.CAL_GOAL + " 千卡"), Ui.matchWrap(6, ctx()));
+        right.addView(legendRow(Ui.MOVE, "运动",
+                todayDay.workoutMinutes + " / " + Insights.WORKOUT_GOAL + " 分钟"), Ui.matchWrap(6, ctx()));
+        main.addView(right, Ui.weight1());
+        card.addView(main, Ui.matchWrap(14, ctx()));
+
+        boolean reached = todayDay.calories >= Insights.CAL_GOAL;
+        LinearLayout hint = Ui.row(ctx());
+        hint.setBackground(Ui.roundRect(reached ? Ui.GREEN_SOFT : Ui.CAL_SOFT, 10, ctx()));
+        int p = Ui.dp(ctx(), 10);
+        hint.setPadding(p, p, p, p);
+        TextView ht = Ui.text(ctx(), (reached ? "🔥 " : "🎯 ") + Insights.calorieHint(todayDay.calories),
+                13, reached ? Ui.DEEP : Color.parseColor("#9a3412"), true);
+        hint.addView(ht, Ui.weight1());
+        card.addView(hint, Ui.matchWrap(14, ctx()));
+        return card;
     }
 
-    private void renderVitality() {
-        LinearLayout card = Ui.card(ctx());
-        boolean connected = mihealth.optBoolean("connected", false);
-        LinearLayout head = Ui.row(ctx());
+    private LinearLayout legendRow(int color, String name, String value) {
+        LinearLayout row = Ui.row(ctx());
         View dot = new View(ctx());
         GradientDrawable dd = new GradientDrawable();
         dd.setShape(GradientDrawable.OVAL);
-        dd.setColor(connected ? Ui.PRIMARY : Ui.BORDER);
+        dd.setColor(color);
         dot.setBackground(dd);
-        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(Ui.dp(ctx(), 9), Ui.dp(ctx(), 9));
-        dl.rightMargin = Ui.dp(ctx(), 8);
-        head.addView(dot, dl);
-        LinearLayout titles = Ui.column(ctx());
-        titles.addView(Ui.sectionTitle(ctx(), "小米运动健康 · 活力看板"));
-        String sub;
-        if (connected) {
-            String synced = mihealth.optString("last_synced_at", "");
-            sub = (synced != null && !synced.isEmpty() && !"null".equals(synced))
-                    ? "数据已同步于 " + synced : "今日活力数据已就绪";
-        } else {
-            sub = "连接小米手环/手表，自动同步全天活力";
-        }
-        titles.addView(Ui.text(ctx(), sub, 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
-        head.addView(titles, Ui.weight1());
-        if (connected) {
-            android.widget.Button refresh = Ui.ghostButton(ctx(), syncing ? "同步中…" : "⚡ 刷新");
-            refresh.setOnClickListener(v -> syncMiHealth());
-            head.addView(refresh);
-        } else {
-            TextView go = pill("去连接 ›", Color.parseColor("#dbeafe"), Color.parseColor("#2563eb"));
-            go.setOnClickListener(v -> activity().switchTab(4));
-            head.addView(go);
-        }
-        card.addView(head);
+        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(Ui.dp(ctx(), 8), Ui.dp(ctx(), 8));
+        dl.rightMargin = Ui.dp(ctx(), 6);
+        row.addView(dot, dl);
+        TextView n = Ui.text(ctx(), name, 12, Ui.SLATE, false);
+        row.addView(n, Ui.weight1());
+        row.addView(Ui.text(ctx(), value, 12, Ui.INK, true));
+        return row;
+    }
 
+    /* 未连接小米: 图片横幅 + 引导文案 + 连接按钮 (跳我的页) */
+    private LinearLayout renderConnectCard() {
+        LinearLayout card = Ui.card(ctx());
+        card.addView(Ui.bannerImage(ctx(), R.drawable.img_connect, 150, 24));
+        card.addView(Ui.sectionTitle(ctx(), "连接小米运动健康，解锁活力数据"), Ui.matchWrap(12, ctx()));
+        card.addView(Ui.text(ctx(), "同步手环/手表的步数、消耗、睡眠与运动数据，首页会自动生成健康分、达标提醒和锻炼建议。",
+                13, Ui.SLATE, false), Ui.matchWrap(6, ctx()));
+        android.widget.Button go = Ui.primaryButton(ctx(), "去连接小米运动健康");
+        go.setOnClickListener(v -> activity().switchTab(4));
+        card.addView(go, Ui.matchWrap(12, ctx()));
+        return card;
+    }
+
+    /* 今日指标 2×2: 步数/消耗/睡眠/运动, 每块回答「达标没、差多少」 */
+    private LinearLayout renderMetricTiles() {
+        LinearLayout col = Ui.column(ctx());
         LinearLayout row1 = Ui.row(ctx());
-        row1.addView(vitalityTile("今日步数", "👟", fmt((double) miToday.optInt("steps", 0)), "步",
-                stepProgress, "目标 8,000 步 · " + stepProgress + "%", Color.parseColor("#ecfdf5")), tileLp(true));
-        row1.addView(vitalityTile("消耗能量", "🔥", fmt(miToday.optDouble("calories", 0)), "kcal",
-                calProgress, "日常动态代谢消耗", Color.parseColor("#fffbeb")), tileLp(false));
-        card.addView(row1, Ui.matchWrap(12, ctx()));
+        String stepSub = todayDay.steps >= Insights.STEP_GOAL ? "已达标 🎉"
+                : "还差 " + fmt((double) (Insights.STEP_GOAL - todayDay.steps)) + " 步";
+        row1.addView(Ui.metricTile(ctx(), Ui.PRIMARY, Ui.GREEN_SOFT, "👟", "步数",
+                fmt((double) todayDay.steps), stepSub,
+                todayDay.steps / (double) Insights.STEP_GOAL), tileLp(true));
+        String calSub = todayDay.calories >= Insights.CAL_GOAL ? "已达标 🎉"
+                : "还差 " + (Insights.CAL_GOAL - todayDay.calories) + " 千卡";
+        row1.addView(Ui.metricTile(ctx(), Ui.CAL, Ui.CAL_SOFT, "🔥", "活动消耗 · 千卡",
+                String.valueOf(todayDay.calories), calSub,
+                todayDay.calories / (double) Insights.CAL_GOAL), tileLp(false));
+        col.addView(row1);
 
-        Double sleep = num(miToday, "sleep_hours");
-        String sleepFoot = sleep != null && sleep >= 7 ? "✨ 作息充足" : (sleep != null ? "需注意补觉" : "手环自动监测");
-        double workout = miToday.optDouble("workout_minutes", 0);
-        String workFoot = workout >= 30 ? "🔥 今日达标" : "建议每日 30 分钟";
         LinearLayout row2 = Ui.row(ctx());
-        row2.addView(vitalityTile("昨夜睡眠", "🌙", fmt(sleep), "小时",
-                -1, sleepFoot, Color.parseColor("#eef2ff")), tileLp(true));
-        row2.addView(vitalityTile("有效运动", "⏱️", fmt(workout), "分钟",
-                -1, workFoot, Color.parseColor("#f5f3ff")), tileLp(false));
-        card.addView(row2, Ui.matchWrap(8, ctx()));
-
-        if (!connected) {
-            LinearLayout hint = Ui.row(ctx());
-            hint.setBackground(Ui.roundRect(Ui.BLUE_SOFT, 10, ctx()));
-            int p = Ui.dp(ctx(), 10);
-            hint.setPadding(p, p, p, p);
-            TextView ht = Ui.text(ctx(), "💡 支持小米手环、手表与体脂秤数据无感同步", 12, Ui.SLATE, false);
-            hint.addView(ht, Ui.weight1());
-            hint.addView(Ui.text(ctx(), "去绑定 ›", 12, Color.parseColor("#2563eb"), true));
-            hint.setOnClickListener(v -> activity().switchTab(4));
-            card.addView(hint, Ui.matchWrap(10, ctx()));
-        }
-        body.addView(card, Ui.matchWrap(12, ctx()));
+        Double sleep = num(miToday, "sleep_hours");
+        String sleepVal = sleep != null ? fmt(sleep) + " 小时" : "--";
+        String sleepSub = sleep == null ? "手环自动监测"
+                : (sleep >= 7 ? "作息充足" : "建议睡满 8 小时");
+        row2.addView(Ui.metricTile(ctx(), Ui.SLEEP, Ui.SLEEP_SOFT, "🌙", "昨夜睡眠",
+                sleepVal, sleepSub, sleep != null ? sleep / Insights.SLEEP_GOAL : -1), tileLp(true));
+        String woSub = todayDay.workoutMinutes >= Insights.WORKOUT_GOAL ? "今日达标 🎉"
+                : "还差 " + (Insights.WORKOUT_GOAL - todayDay.workoutMinutes) + " 分钟";
+        row2.addView(Ui.metricTile(ctx(), Ui.MOVE, Ui.MOVE_SOFT, "⏱️", "运动 · 分钟",
+                String.valueOf(todayDay.workoutMinutes), woSub,
+                todayDay.workoutMinutes / (double) Insights.WORKOUT_GOAL), tileLp(false));
+        LinearLayout.LayoutParams r2 = Ui.matchWrap(10, ctx());
+        col.addView(row2, r2);
+        return col;
     }
 
     private LinearLayout.LayoutParams tileLp(boolean left) {
@@ -667,27 +665,91 @@ public class IndexPage extends BasePage {
         return lp;
     }
 
-    private LinearLayout vitalityTile(String label, String icon, String value, String unit,
-                                      int progress, String foot, int bg) {
-        LinearLayout tile = Ui.column(ctx());
-        tile.setBackground(Ui.roundRect(bg, 12, ctx()));
-        int p = Ui.dp(ctx(), 12);
-        tile.setPadding(p, p, p, p);
-        LinearLayout top = Ui.row(ctx());
-        TextView l = Ui.text(ctx(), label, 12, Ui.SLATE, false);
-        top.addView(l, Ui.weight1());
-        top.addView(Ui.text(ctx(), icon, 13, Ui.INK, false));
-        tile.addView(top);
-        LinearLayout valRow = Ui.row(ctx());
-        valRow.addView(Ui.text(ctx(), value, 20, Ui.INK, true));
-        valRow.addView(Ui.text(ctx(), " " + unit, 11, Ui.MUTED, false));
-        tile.addView(valRow, Ui.matchWrap(4, ctx()));
-        if (progress >= 0) tile.addView(progressTrack(progress, Ui.PRIMARY, 5), Ui.matchWrap(8, ctx()));
-        tile.addView(Ui.text(ctx(), foot, 11, Ui.MUTED, false), Ui.matchWrap(6, ctx()));
-        return tile;
+    /* 健康洞察: 取洞察引擎前 2 条, 无内容时整卡不渲染 */
+    private LinearLayout renderInsightsCard() {
+        List<Insights.Insight> recs = Insights.recommendations(todayDay, weekStats, todayPlan);
+        if (recs.isEmpty()) return null;
+        LinearLayout card = Ui.card(ctx());
+        card.addView(Ui.sectionHeader(ctx(), "健康洞察", "看分析 ›", v -> activity().switchTab(3)));
+        int n = Math.min(2, recs.size());
+        for (int i = 0; i < n; i++) {
+            Insights.Insight ins = recs.get(i);
+            String icon = ins.level == Insights.Level.GOOD ? "✅"
+                    : ins.level == Insights.Level.WARN ? "⚠️" : "💡";
+            LinearLayout row = Ui.row(ctx());
+            row.setGravity(Gravity.TOP);
+            TextView ic = Ui.text(ctx(), icon, 16, Ui.INK, false);
+            LinearLayout.LayoutParams il = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            il.rightMargin = Ui.dp(ctx(), 8);
+            il.topMargin = Ui.dp(ctx(), 1);
+            row.addView(ic, il);
+            LinearLayout texts = Ui.column(ctx());
+            texts.addView(Ui.text(ctx(), ins.title, 14, Ui.INK, true));
+            texts.addView(Ui.text(ctx(), ins.body, 12, Ui.SLATE, false), Ui.matchWrap(2, ctx()));
+            row.addView(texts, Ui.weight1());
+            card.addView(row, Ui.matchWrap(i == 0 ? 12 : 10, ctx()));
+        }
+        return card;
     }
 
-    private void renderActions() {
+    /* 体重卡: 当前体重 + 较昨日 + BMI + 目标进度条 + 记体重入口 */
+    private LinearLayout renderWeightCard() {
+        LinearLayout card = Ui.card(ctx());
+        LinearLayout top = Ui.row(ctx());
+        LinearLayout left = Ui.column(ctx());
+        left.addView(Ui.label(ctx(), "当前体重 · " + goalLabelText));
+        boolean fromMi = "mihealth".equals(data.optString("current_weight_source", ""));
+        left.addView(Ui.text(ctx(), fromMi ? "数据源自小米运动健康同步" : "持续记录，见证身体点滴变化",
+                11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
+        top.addView(left, Ui.weight1());
+        TextView goalPill = pill("目标 " + fmt(num(data, "target_weight")) + " kg"
+                + (remainingWeight.isEmpty() ? "" : " · " + remainingWeight),
+                Color.parseColor("#d1fae5"), Ui.PRIMARY);
+        top.addView(goalPill);
+        card.addView(top);
+
+        LinearLayout wRow = Ui.row(ctx());
+        wRow.addView(Ui.text(ctx(), fmt(num(data, "current_weight")), 34, Ui.INK, true));
+        wRow.addView(Ui.text(ctx(), " kg", 16, Ui.SLATE, false));
+        if (!diffLabel.isEmpty()) {
+            TextView dp2 = pill(diffLabel, Ui.BLUE_SOFT, Color.parseColor("#2563eb"));
+            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            dl.leftMargin = Ui.dp(ctx(), 8);
+            wRow.addView(dp2, dl);
+        }
+        Double bmi = num(data, "bmi");
+        if (bmi != null && bmi > 0) {
+            TextView bp = pill("BMI " + fmt(bmi) + " · " + bmiStatus, pillBg(bmiPillKind), pillFg(bmiPillKind));
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            bl.leftMargin = Ui.dp(ctx(), 8);
+            wRow.addView(bp, bl);
+        }
+        card.addView(wRow, Ui.matchWrap(10, ctx()));
+
+        if (showGoalProgress) {
+            FrameLayout bar = Ui.progressBar(ctx(), goalProgressVal / 100.0, Ui.PRIMARY, 8);
+            LinearLayout.LayoutParams blp = (LinearLayout.LayoutParams) bar.getLayoutParams();
+            blp.topMargin = Ui.dp(ctx(), 12);
+            bar.setLayoutParams(blp);
+            card.addView(bar);
+            LinearLayout foot = Ui.row(ctx());
+            TextView fl = Ui.text(ctx(), progressLabel, 12, Ui.MUTED, false);
+            foot.addView(fl, Ui.weight1());
+            foot.addView(Ui.text(ctx(), goalProgressVal + "%", 12, Ui.PRIMARY, true));
+            card.addView(foot, Ui.matchWrap(6, ctx()));
+        }
+
+        android.widget.Button record = Ui.primaryButton(ctx(), "记体重");
+        record.setOnClickListener(v -> activity().switchTab(2));
+        card.addView(record, Ui.matchWrap(14, ctx()));
+        return card;
+    }
+
+    /* 今日待办 (保留原 todos 逻辑与两个入口) */
+    private LinearLayout renderActionsCard() {
         LinearLayout card = Ui.card(ctx());
         LinearLayout head = Ui.row(ctx());
         LinearLayout titles = Ui.column(ctx());
@@ -723,25 +785,18 @@ public class IndexPage extends BasePage {
         LinearLayout.LayoutParams br = Ui.weight1(); br.leftMargin = Ui.dp(ctx(), 6);
         btnRow.addView(sub, br);
         card.addView(btnRow, Ui.matchWrap(14, ctx()));
-        body.addView(card, Ui.matchWrap(12, ctx()));
+        return card;
     }
 
-    private void renderTrendCard() {
+    /* 7 天体重波动 (保留原柱状实现, 标题换 sectionHeader 样式) */
+    private LinearLayout renderTrendCard() {
         LinearLayout card = Ui.card(ctx());
-        LinearLayout head = Ui.row(ctx());
-        LinearLayout titles = Ui.column(ctx());
-        titles.addView(Ui.sectionTitle(ctx(), "7天体重波动"));
-        titles.addView(Ui.text(ctx(), "平稳渐进 · 关注整体走势", 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
-        head.addView(titles, Ui.weight1());
-        LinearLayout right = Ui.column(ctx());
-        right.setGravity(Gravity.RIGHT);
-        right.addView(pill("目标 " + fmt(num(data, "target_weight")) + " kg", Ui.SOFT, Ui.SLATE));
-        TextView link = Ui.text(ctx(), "看分析 ›", 12, Ui.PRIMARY, true);
-        link.setGravity(Gravity.RIGHT);
-        link.setOnClickListener(v -> activity().switchTab(3));
-        right.addView(link, Ui.matchWrap(6, ctx()));
-        head.addView(right);
-        card.addView(head);
+        card.addView(Ui.sectionHeader(ctx(), "7 天体重波动", "看分析 ›", v -> activity().switchTab(3)));
+        LinearLayout subRow = Ui.row(ctx());
+        TextView sub = Ui.text(ctx(), "平稳渐进 · 关注整体走势", 11, Ui.MUTED, false);
+        subRow.addView(sub, Ui.weight1());
+        subRow.addView(pill("目标 " + fmt(num(data, "target_weight")) + " kg", Ui.SOFT, Ui.SLATE));
+        card.addView(subRow, Ui.matchWrap(4, ctx()));
 
         LinearLayout chart = Ui.row(ctx());
         chart.setGravity(Gravity.BOTTOM);
@@ -770,42 +825,6 @@ public class IndexPage extends BasePage {
             chart.addView(col, Ui.weight1());
         }
         card.addView(chart, Ui.matchWrap(12, ctx()));
-        body.addView(card, Ui.matchWrap(12, ctx()));
-    }
-
-    private void renderJourney() {
-        LinearLayout head = Ui.row(ctx());
-        TextView h = Ui.text(ctx(), "开启你的健康旅程", 15, Ui.INK, true);
-        head.addView(h, Ui.weight1());
-        head.addView(Ui.text(ctx(), "滑动查看", 11, Ui.MUTED, false));
-        body.addView(head, Ui.matchWrap(16, ctx()));
-
-        HorizontalScrollView hsv = new HorizontalScrollView(ctx());
-        hsv.setHorizontalScrollBarEnabled(false);
-        LinearLayout track = Ui.row(ctx());
-        track.addView(journeyCard("📏", "身体基线", "用体重、腰围和 BMI，建立自己的观察基准。", "开始记录 ›",
-                Color.parseColor("#ecfdf5"), () -> activity().switchTab(2)));
-        track.addView(journeyCard("📅", "周训练计划", "为这一周安排力量、有氧与放松恢复。", "查看周计划 ›",
-                Color.parseColor("#eff6ff"), () -> activity().switchTab(1)));
-        track.addView(journeyCard("📈", "每一步看得见", "复盘生理波动、睡眠时长与小习惯坚持度。", "查看趋势复盘 ›",
-                Color.parseColor("#f5f3ff"), () -> activity().switchTab(3)));
-        hsv.addView(track);
-        body.addView(hsv, Ui.matchWrap(8, ctx()));
-    }
-
-    private LinearLayout journeyCard(String icon, String title, String desc, String link, int bg, Runnable action) {
-        LinearLayout card = Ui.column(ctx());
-        card.setBackground(Ui.roundRect(bg, 16, ctx()));
-        int p = Ui.dp(ctx(), 14);
-        card.setPadding(p, p, p, p);
-        card.addView(Ui.text(ctx(), icon, 22, Ui.INK, false));
-        card.addView(Ui.text(ctx(), title, 14, Ui.INK, true), Ui.matchWrap(8, ctx()));
-        card.addView(Ui.text(ctx(), desc, 12, Ui.SLATE, false), Ui.matchWrap(4, ctx()));
-        card.addView(Ui.text(ctx(), link, 12, Ui.PRIMARY, true), Ui.matchWrap(8, ctx()));
-        card.setOnClickListener(v -> action.run());
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(Ui.dp(ctx(), 218), ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.rightMargin = Ui.dp(ctx(), 10);
-        card.setLayoutParams(lp);
         return card;
     }
 
@@ -892,38 +911,6 @@ public class IndexPage extends BasePage {
             case "purple": return Color.parseColor("#7c3aed");
             default: return Ui.PRIMARY;
         }
-    }
-
-    private View specSeg(int color, float weight) {
-        View v = new View(ctx());
-        v.setBackground(Ui.roundRect(color, 3, ctx()));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, Ui.dp(ctx(), 6), weight);
-        lp.rightMargin = Ui.dp(ctx(), 3);
-        v.setLayoutParams(lp);
-        return v;
-    }
-
-    private TextView specLabel(String s, int gravity) {
-        TextView t = Ui.text(ctx(), s, 10, Ui.MUTED, false);
-        t.setGravity(gravity);
-        LinearLayout.LayoutParams lp = Ui.weight1();
-        t.setLayoutParams(lp);
-        return t;
-    }
-
-    private LinearLayout progressTrack(int progress, int fillColor, int heightDp) {
-        LinearLayout track = Ui.row(ctx());
-        track.setBackground(Ui.roundRect(Ui.BORDER, heightDp / 2f, ctx()));
-        if (progress > 0) {
-            View fill = new View(ctx());
-            fill.setBackground(Ui.roundRect(fillColor, heightDp / 2f, ctx()));
-            track.addView(fill, new LinearLayout.LayoutParams(0, Ui.dp(ctx(), heightDp), progress));
-        }
-        if (progress < 100) {
-            View rest = new View(ctx());
-            track.addView(rest, new LinearLayout.LayoutParams(0, Ui.dp(ctx(), heightDp), 100 - progress));
-        }
-        return track;
     }
 
     /* ---------------- 工具 ---------------- */

@@ -2,13 +2,17 @@ package art.qelora.welltrack.ui;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Outline;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -25,6 +29,16 @@ public class Ui {
     public static final int SOFT = Color.parseColor("#f1f5f9");
     public static final int BLUE_SOFT = Color.parseColor("#eff6ff");
     public static final int RED = Color.parseColor("#dc2626");
+    // v2 指标专属色 (参考 Mi Fitness 活力值体系: 步数绿 / 消耗橙 / 睡眠紫 / 运动蓝)
+    public static final int CAL = Color.parseColor("#f97316");
+    public static final int CAL_SOFT = Color.parseColor("#fff7ed");
+    public static final int SLEEP = Color.parseColor("#8b5cf6");
+    public static final int SLEEP_SOFT = Color.parseColor("#f5f3ff");
+    public static final int MOVE = Color.parseColor("#0ea5e9");
+    public static final int MOVE_SOFT = Color.parseColor("#f0f9ff");
+    public static final int GREEN_SOFT = Color.parseColor("#ecfdf5");
+    public static final int DEEP = Color.parseColor("#065f46");
+    public static final int DEEP2 = Color.parseColor("#047857");
 
     public static int dp(Context c, float v) {
         return (int) (v * c.getResources().getDisplayMetrics().density + 0.5f);
@@ -139,5 +153,106 @@ public class Ui {
     public static LinearLayout.LayoutParams weight1() {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         return lp;
+    }
+
+    // ---------- v2 设计系统 (视觉升级轮次加入) ----------
+
+    /** 大圆角深绿渐变主视觉卡背景 */
+    public static GradientDrawable heroGradient(Context c) {
+        GradientDrawable d = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR, new int[]{DEEP2, DEEP});
+        d.setCornerRadius(dp(c, 24));
+        return d;
+    }
+
+    /** 圆角裁剪的图片横幅 (CENTER_CROP) */
+    public static ImageView bannerImage(Context c, int resId, int heightDp, float radiusDp) {
+        ImageView iv = new ImageView(c);
+        iv.setImageResource(resId);
+        iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        iv.setClipToOutline(true);
+        final float r = dp(c, radiusDp);
+        iv.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), r);
+            }
+        });
+        iv.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(c, heightDp)));
+        return iv;
+    }
+
+    /** 章节标题行: 大标题 + 可选右侧动作文字 */
+    public static LinearLayout sectionHeader(Context c, String title, String action, View.OnClickListener onAction) {
+        LinearLayout r = row(c);
+        TextView t = text(c, title, 17, INK, true);
+        r.addView(t, weight1());
+        if (action != null) {
+            TextView a = text(c, action, 13, PRIMARY, false);
+            a.setPadding(dp(c, 8), dp(c, 4), 0, dp(c, 4));
+            if (onAction != null) a.setOnClickListener(onAction);
+            r.addView(a);
+        }
+        return r;
+    }
+
+    /** 细进度条 (轨道 + 彩色填充), ratio 0..1 */
+    public static FrameLayout progressBar(Context c, double ratio, int color, int heightDp) {
+        FrameLayout track = new FrameLayout(c);
+        track.setBackground(roundRect(Color.parseColor("#e8edf2"), heightDp / 2f, c));
+        track.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(c, heightDp)));
+        final View fill = new View(c);
+        fill.setBackground(roundRect(color, heightDp / 2f, c));
+        double clamped = Math.max(0, Math.min(1, ratio));
+        fill.setLayoutParams(new FrameLayout.LayoutParams(0, FrameLayout.LayoutParams.MATCH_PARENT));
+        track.addView(fill);
+        final double rr = clamped;
+        track.post(() -> {
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) fill.getLayoutParams();
+            lp.width = (int) (track.getWidth() * rr);
+            fill.setLayoutParams(lp);
+        });
+        return track;
+    }
+
+    /** 指标瓷砖: 彩色图标字 + 标签 + 大数值 + 可选达标进度条 */
+    public static LinearLayout metricTile(Context c, int accent, int softBg, String emoji,
+                                          String label, String value, String sub, double ratio) {
+        LinearLayout t = column(c);
+        t.setBackground(roundRect(softBg, 16, c));
+        int p = dp(c, 12);
+        t.setPadding(p, p, p, p);
+        LinearLayout head = row(c);
+        TextView em = text(c, emoji, 15, accent, true);
+        TextView lb = text(c, label, 12, SLATE, false);
+        lb.setPadding(dp(c, 5), 0, 0, 0);
+        head.addView(em);
+        head.addView(lb);
+        t.addView(head);
+        TextView v = text(c, value, 20, INK, true);
+        LinearLayout.LayoutParams vlp = matchWrap(4, c);
+        t.addView(v, vlp);
+        if (sub != null) {
+            TextView s = text(c, sub, 11, MUTED, false);
+            t.addView(s, matchWrap(2, c));
+        }
+        if (ratio >= 0) {
+            FrameLayout bar = progressBar(c, ratio, accent, 5);
+            LinearLayout.LayoutParams blp = (LinearLayout.LayoutParams) bar.getLayoutParams();
+            blp.topMargin = dp(c, 8);
+            bar.setLayoutParams(blp);
+            t.addView(bar);
+        }
+        return t;
+    }
+
+    /** 小胶囊标签 */
+    public static TextView chip(Context c, String s, int fg, int bg) {
+        TextView t = text(c, s, 11, fg, true);
+        t.setBackground(roundRect(bg, 10, c));
+        int h = dp(c, 8), v = dp(c, 3);
+        t.setPadding(h, v, h, v);
+        return t;
     }
 }

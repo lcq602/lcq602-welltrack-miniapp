@@ -19,6 +19,7 @@ import org.json.JSONObject;
 
 import java.util.Calendar;
 
+import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
@@ -96,6 +97,9 @@ public class PlanPage extends BasePage {
         TextView title = Ui.title(c, "阶段计划");
         title.setTextSize(24);
         content.addView(title, Ui.matchWrap(2, c));
+
+        // 顶部主视觉横幅 (瑜伽插画)
+        content.addView(Ui.bannerImage(c, R.drawable.img_plan, 130, 24), Ui.matchWrap(12, c));
 
         // 温和心念卡片
         LinearLayout quote = Ui.card(c);
@@ -203,8 +207,7 @@ public class PlanPage extends BasePage {
 
         // ---- 阶段目标卡片 ----
         LinearLayout card = Ui.card(c);
-        card.addView(Ui.label(c, "MY DIRECTION"));
-        card.addView(Ui.sectionTitle(c, "阶段目标"), Ui.matchWrap(2, c));
+        card.addView(Ui.sectionHeader(c, "阶段目标", null, null));
         TextView going = chip("进行中", true);
         card.addView(going, Ui.matchWrap(6, c));
 
@@ -268,8 +271,7 @@ public class PlanPage extends BasePage {
 
         // ---- 周安排卡片 ----
         LinearLayout schedule = Ui.card(c);
-        schedule.addView(Ui.label(c, "YOUR WEEK"));
-        schedule.addView(Ui.sectionTitle(c, "安排一个现实的星期"), Ui.matchWrap(2, c));
+        schedule.addView(Ui.sectionHeader(c, "安排一个现实的星期", null, null));
         schedule.addView(Ui.text(c, "训练、活动和休息都算计划的一部分", 12.5f, Ui.SLATE, false), Ui.matchWrap(2, c));
         TextView weekPill = chip("周节奏", false);
         schedule.addView(weekPill, Ui.matchWrap(6, c));
@@ -277,10 +279,11 @@ public class PlanPage extends BasePage {
         for (int i = 0; i < 7; i++) {
             final int idx = i;
             LinearLayout rowLayout = Ui.row(c);
-            TextView badge = Ui.text(c, DAY_NAMES[i], 13, Color.parseColor("#2563eb"), true);
+            // 日徽标: 彩色圆 (工作日绿 / 周末橙), 圆内单字
+            TextView badge = Ui.text(c, DAY_NAMES[i].substring(1), 13, Color.WHITE, true);
             badge.setGravity(Gravity.CENTER);
-            badge.setBackground(roundStroke(Ui.BLUE_SOFT, 10, Color.parseColor("#d7e7fd")));
-            badge.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(c, 44), Ui.dp(c, 34)));
+            badge.setBackground(Ui.roundRect(i >= 5 ? Ui.CAL : Ui.PRIMARY, 999, c));
+            badge.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(c, 34), Ui.dp(c, 34)));
             rowLayout.addView(badge);
 
             LinearLayout selector = Ui.column(c);
@@ -288,9 +291,14 @@ public class PlanPage extends BasePage {
             int hp = Ui.dp(c, 12), vp = Ui.dp(c, 9);
             selector.setPadding(hp, vp, hp, vp);
             TextView val = Ui.text(c, dayValues[i], 14.5f, Ui.INK, true);
-            TextView tag = Ui.text(c, activityTag(dayValues[i]), 11, Ui.SLATE, false);
+            TextView tag = Ui.chip(c, "", Ui.PRIMARY_DARK, Ui.GREEN_SOFT);
+            styleTagChip(tag, dayValues[i]);
             selector.addView(val);
-            selector.addView(tag);
+            LinearLayout.LayoutParams tagLp = new LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+            tagLp.topMargin = Ui.dp(c, 5);
+            selector.addView(tag, tagLp);
             dayValueViews[i] = val;
             dayTagViews[i] = tag;
             LinearLayout.LayoutParams slp = Ui.weight1();
@@ -307,6 +315,18 @@ public class PlanPage extends BasePage {
         note.setGravity(Gravity.CENTER);
         schedule.addView(note, Ui.matchWrap(6, c));
         body.addView(schedule, Ui.matchWrap(12, c));
+    }
+
+    /** 强度标签 chip 配色: 中高强度=橙 / 恢复日=灰 / 其余=绿; 切换活动时同步刷新 */
+    private void styleTagChip(TextView t, String activity) {
+        String tag = activityTag(activity);
+        int fg, bg;
+        if ("中高强度".equals(tag)) { fg = Color.parseColor("#c2410c"); bg = Ui.CAL_SOFT; }
+        else if ("恢复日".equals(tag)) { fg = Ui.SLATE; bg = Ui.SOFT; }
+        else { fg = Ui.PRIMARY_DARK; bg = Ui.GREEN_SOFT; }
+        t.setText(tag);
+        t.setTextColor(fg);
+        t.setBackground(Ui.roundRect(bg, 10, ctx()));
     }
 
     private LinearLayout tileBox(Context c, String label, String unit) {
@@ -396,7 +416,7 @@ public class PlanPage extends BasePage {
                 .setSingleChoiceItems(WEEK_OPTIONS, choice, (dialog, which) -> {
                     dayValues[dayIdx] = WEEK_OPTIONS[which];
                     if (dayValueViews[dayIdx] != null) dayValueViews[dayIdx].setText(dayValues[dayIdx]);
-                    if (dayTagViews[dayIdx] != null) dayTagViews[dayIdx].setText(activityTag(dayValues[dayIdx]));
+                    if (dayTagViews[dayIdx] != null) styleTagChip(dayTagViews[dayIdx], dayValues[dayIdx]);
                     dialog.dismiss();
                 })
                 .setNegativeButton("取消", null)

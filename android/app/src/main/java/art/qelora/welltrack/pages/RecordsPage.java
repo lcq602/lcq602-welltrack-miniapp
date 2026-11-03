@@ -32,10 +32,12 @@ import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
 /**
- * 记录页: 与小程序 pages/records 同构。
- * 日期 + 三组表单保存 POST /api/v1/records; 历史列表 GET /api/v1/records?limit=60
- * (含手环同步合并数据), 支持 全部/手环同步/手工记录 筛选;
- * 顶部可导出 CSV (/api/v1/export.csv) 与 JSON 备份 (/api/v1/backup) 到应用下载目录。
+ * 记录页 v2 (视觉重构, 数据逻辑与小程序 pages/records 一致):
+ * 页头 (标题+导出) → 今日体重主卡 (日期/大号体重/腰围/提示/保存) →
+ * 日常状态卡 (饮水/睡眠/饮食, 彩色点行) → 小习惯瓷砖卡 → 备注与运动入口 →
+ * 历史区 (总数副标题 + 三段筛选 + 彩色指标标签)。
+ * 接口不变: POST /api/v1/records; GET /api/v1/records?limit=60;
+ * 导出 /api/v1/export.csv 与 /api/v1/backup 写应用下载目录。
  */
 public class RecordsPage extends BasePage {
     private static final String[] HABIT_NAMES = {"运动", "均衡饮食", "喝够水", "按时睡眠", "减少久坐"};
@@ -64,29 +66,29 @@ public class RecordsPage extends BasePage {
     @Override
     protected void build() {
         Context c = ctx();
-        // 页头 + 导出入口
-        content.addView(Ui.label(c, "● A GENTLE DAILY CHECK-IN"));
+        // 1. 页头行: 大标题 + 右侧导出 chip
+        LinearLayout headRow = Ui.row(c);
+        LinearLayout headTexts = Ui.column(c);
+        headTexts.addView(Ui.label(c, "● A GENTLE DAILY CHECK-IN"));
         TextView title = Ui.title(c, "记录今天");
         title.setTextSize(24);
-        content.addView(title, Ui.matchWrap(2, c));
-        LinearLayout exportRow = Ui.row(c);
-        Button csvBtn = Ui.ghostButton(c, "📊 导出 CSV");
-        csvBtn.setOnClickListener(v -> exportFile("/api/v1/export.csv", "welltrack-export.csv", "CSV 数据"));
-        Button bakBtn = Ui.ghostButton(c, "💾 备份");
-        bakBtn.setOnClickListener(v -> exportFile("/api/v1/backup", "welltrack-backup.json", "JSON 备份"));
-        exportRow.addView(csvBtn);
-        LinearLayout.LayoutParams blp = Ui.weight1();
-        blp.leftMargin = Ui.dp(c, 8);
-        LinearLayout spacer = Ui.column(c);
-        exportRow.addView(spacer, blp);
-        exportRow.addView(bakBtn);
-        content.addView(exportRow, Ui.matchWrap(10, c));
+        headTexts.addView(title, Ui.matchWrap(2, c));
+        headRow.addView(headTexts, Ui.weight1());
+        TextView csvChip = Ui.chip(c, "📊 导出 CSV", Ui.PRIMARY, Ui.GREEN_SOFT);
+        csvChip.setOnClickListener(v -> exportFile("/api/v1/export.csv", "welltrack-export.csv", "CSV 数据"));
+        headRow.addView(csvChip);
+        TextView bakChip = Ui.chip(c, "💾 备份", Ui.PRIMARY, Ui.GREEN_SOFT);
+        bakChip.setOnClickListener(v -> exportFile("/api/v1/backup", "welltrack-backup.json", "JSON 备份"));
+        LinearLayout.LayoutParams bakLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        bakLp.leftMargin = Ui.dp(c, 8);
+        headRow.addView(bakChip, bakLp);
+        content.addView(headRow);
 
-        // 日期横幅
-        LinearLayout dateCard = Ui.card(c);
+        // 2. 今日体重主卡: 日期行 / 大号体重 / 腰围 / 提示条 / 保存
+        LinearLayout weightCard = Ui.card(c);
         LinearLayout dateRow = Ui.row(c);
-        TextView dateIcon = Ui.text(c, "📅", 20, Ui.PRIMARY, false);
-        dateRow.addView(dateIcon);
+        dateRow.addView(Ui.text(c, "📅", 20, Ui.PRIMARY, false));
         LinearLayout dateTexts = Ui.column(c);
         dateTexts.addView(Ui.text(c, "正在记录日期", 11.5f, Ui.MUTED, false));
         dateValueView = Ui.text(c, recordDate, 16, Ui.INK, true);
@@ -97,70 +99,100 @@ public class RecordsPage extends BasePage {
         Button changeDate = Ui.ghostButton(c, "更改日期 ⌄");
         changeDate.setOnClickListener(v -> pickDate());
         dateRow.addView(changeDate);
-        dateCard.addView(dateRow);
-        content.addView(dateCard, Ui.matchWrap(12, c));
+        weightCard.addView(dateRow);
 
-        // 表单卡片
-        LinearLayout form = Ui.card(c);
-        // 01 身体数据
-        form.addView(sectionHead(c, "01", "身体数据", "不必每天都称重，记录方便观察的项目",
-                Color.parseColor("#ecfdf5"), Ui.PRIMARY));
-        LinearLayout grid1 = Ui.row(c);
-        weightInput = tileInput(form, grid1, "体重 · kg", "—", "kg", true);
-        waistInput = tileInput(form, grid1, "腰围 · cm", "—", "cm", false);
-        form.addView(grid1, Ui.matchWrap(8, c));
-        // 02 日常状态
-        form.addView(sectionHead(c, "02", "日常状态", "关注补水、作息与饱腹体感",
-                Ui.BLUE_SOFT, Color.parseColor("#2563eb")), Ui.matchWrap(16, c));
-        LinearLayout grid2 = Ui.row(c);
-        waterInput = tileInput(form, grid2, "饮水 · ml", "如 2000", "ml", true);
-        sleepInput = tileInput(form, grid2, "睡眠 · 小时", "如 7.5", "h", false);
-        form.addView(grid2, Ui.matchWrap(8, c));
-        form.addView(Ui.text(c, "饮食简记", 12.5f, Ui.SLATE, true), Ui.matchWrap(10, c));
-        dietInput = Ui.input(c, "例如：三餐规律，晚餐蔬菜过半，无夜宵", InputType.TYPE_CLASS_TEXT);
-        form.addView(dietInput, Ui.matchWrap(4, c));
-        // 03 小习惯
-        form.addView(sectionHead(c, "03", "今天做到的小习惯", "勾选达成的行动，累积正向复利",
-                Color.parseColor("#fffbeb"), Color.parseColor("#d97706")), Ui.matchWrap(16, c));
+        weightCard.addView(Ui.text(c, "今日体重", 12.5f, Ui.SLATE, true), Ui.matchWrap(16, c));
+        LinearLayout weightRow = Ui.row(c);
+        weightInput = Ui.input(c, "—", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        weightInput.setTextSize(22);
+        int wvp = Ui.dp(c, 14);
+        weightInput.setPadding(Ui.dp(c, 14), wvp, Ui.dp(c, 14), wvp);
+        weightInput.setGravity(Gravity.CENTER_VERTICAL);
+        weightRow.addView(weightInput, Ui.weight1());
+        TextView kg = Ui.text(c, "kg", 16, Ui.MUTED, true);
+        LinearLayout.LayoutParams kgLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        kgLp.leftMargin = Ui.dp(c, 10);
+        weightRow.addView(kg, kgLp);
+        weightCard.addView(weightRow, Ui.matchWrap(6, c));
+
+        LinearLayout waistRow = Ui.row(c);
+        waistRow.addView(Ui.text(c, "腰围", 13, Ui.SLATE, true));
+        waistInput = Ui.input(c, "—", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        LinearLayout.LayoutParams waistLp = Ui.weight1();
+        waistLp.leftMargin = Ui.dp(c, 12);
+        waistRow.addView(waistInput, waistLp);
+        TextView cm = Ui.text(c, "cm", 13, Ui.MUTED, false);
+        LinearLayout.LayoutParams cmLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        cmLp.leftMargin = Ui.dp(c, 8);
+        waistRow.addView(cm, cmLp);
+        weightCard.addView(waistRow, Ui.matchWrap(10, c));
+
+        // 手环同步提示 / 已有记录提示 (原有逻辑)
+        miHintView = Ui.text(c, "", 12.5f, Color.parseColor("#0369a1"), false);
+        miHintView.setVisibility(View.GONE);
+        weightCard.addView(miHintView, Ui.matchWrap(12, c));
+        alreadyView = Ui.text(c, "✓ 这一天已有手工记录，可切换上方日期查看或修改。", 12.5f, Ui.PRIMARY, false);
+        alreadyView.setVisibility(View.GONE);
+        weightCard.addView(alreadyView, Ui.matchWrap(8, c));
+
+        saveButton = Ui.primaryButton(c, "保存今天的记录");
+        saveButton.setOnClickListener(v -> save());
+        weightCard.addView(saveButton, Ui.matchWrap(14, c));
+        TextView foot = Ui.text(c, "每个日期可保存一份手工记录；手环数据会自动在此合并汇流。", 11.5f, Ui.MUTED, false);
+        foot.setGravity(Gravity.CENTER);
+        weightCard.addView(foot, Ui.matchWrap(6, c));
+        content.addView(weightCard, Ui.matchWrap(14, c));
+
+        // 3. 日常状态卡: 彩色点整齐行 (饮水蓝/睡眠紫/饮食橙)
+        LinearLayout statusCard = Ui.card(c);
+        statusCard.addView(Ui.sectionHeader(c, "日常状态", null, null));
+        statusCard.addView(Ui.text(c, "关注补水、作息与饱腹体感", 12, Ui.SLATE, false), Ui.matchWrap(2, c));
+        waterInput = statusRow(statusCard, Ui.MOVE, "饮水", "如 2000", "ml", true, true);
+        sleepInput = statusRow(statusCard, Ui.SLEEP, "睡眠", "如 7.5", "小时", true, false);
+        dietInput = statusRow(statusCard, Ui.CAL, "饮食简记", "例如：三餐规律，晚餐蔬菜过半，无夜宵", null, false, false);
+        content.addView(statusCard, Ui.matchWrap(12, c));
+
+        // 4. 小习惯卡: 2 列瓷砖勾选
+        LinearLayout habitCard = Ui.card(c);
+        habitCard.addView(Ui.sectionHeader(c, "今天做到的小习惯", null, null));
+        habitCard.addView(Ui.text(c, "勾选达成的行动，累积正向复利", 12, Ui.SLATE, false), Ui.matchWrap(2, c));
         GridLayout habitGrid = new GridLayout(c);
         habitGrid.setColumnCount(2);
         for (int i = 0; i < HABIT_NAMES.length; i++) {
             final int idx = i;
-            TextView chipView = habitChip(HABIT_NAMES[i], false);
-            chipView.setOnClickListener(v -> {
+            TextView tile = habitTile(HABIT_NAMES[i], false);
+            tile.setOnClickListener(v -> {
                 habitSelected[idx] = !habitSelected[idx];
                 refreshHabitChip(idx);
             });
-            habitChips[i] = chipView;
+            habitChips[i] = tile;
             GridLayout.LayoutParams glp = new GridLayout.LayoutParams();
             glp.width = 0;
             glp.columnSpec = GridLayout.spec(i % 2, 1f);
             glp.setMargins(Ui.dp(c, 3), Ui.dp(c, 3), Ui.dp(c, 3), Ui.dp(c, 3));
-            habitGrid.addView(chipView, glp);
+            habitGrid.addView(tile, glp);
         }
-        form.addView(habitGrid, Ui.matchWrap(6, c));
-        // 备注
-        form.addView(Ui.text(c, "补充备注 · 选填", 12.5f, Ui.SLATE, true), Ui.matchWrap(10, c));
-        noteInput = Ui.input(c, "写下今天身体感受或值得记住的一件事…", InputType.TYPE_CLASS_TEXT);
-        form.addView(noteInput, Ui.matchWrap(4, c));
-        // 手环同步提示 / 已有记录提示
-        miHintView = Ui.text(c, "", 12.5f, Color.parseColor("#0369a1"), false);
-        miHintView.setVisibility(View.GONE);
-        form.addView(miHintView, Ui.matchWrap(10, c));
-        alreadyView = Ui.text(c, "✓ 这一天已有手工记录，可切换上方日期查看或修改。", 12.5f, Ui.PRIMARY, false);
-        alreadyView.setVisibility(View.GONE);
-        form.addView(alreadyView, Ui.matchWrap(8, c));
-        // 保存
-        saveButton = Ui.primaryButton(c, "保存今天的记录");
-        saveButton.setOnClickListener(v -> save());
-        form.addView(saveButton, Ui.matchWrap(14, c));
-        TextView foot = Ui.text(c, "每个日期可保存一份手工记录；手环数据会自动在此合并汇流。", 11.5f, Ui.MUTED, false);
-        foot.setGravity(Gravity.CENTER);
-        form.addView(foot, Ui.matchWrap(6, c));
-        content.addView(form, Ui.matchWrap(12, c));
+        habitCard.addView(habitGrid, Ui.matchWrap(8, c));
+        content.addView(habitCard, Ui.matchWrap(12, c));
 
-        // 历史记录
-        content.addView(Ui.sectionTitle(c, "历史记录流"), Ui.matchWrap(16, c));
+        // 5. 备注 + 运动快捷入口
+        LinearLayout noteCard = Ui.card(c);
+        noteCard.addView(Ui.text(c, "补充备注 · 选填", 12.5f, Ui.SLATE, true));
+        noteInput = Ui.input(c, "写下今天身体感受或值得记住的一件事…", InputType.TYPE_CLASS_TEXT);
+        noteCard.addView(noteInput, Ui.matchWrap(6, c));
+        LinearLayout exerciseRow = Ui.row(c);
+        exerciseRow.addView(Ui.text(c, "刚运动完？顺手记一笔", 12.5f, Ui.SLATE, false), Ui.weight1());
+        TextView goExercise = Ui.text(c, "⚡ 记一笔运动 ›", 13, Ui.PRIMARY, true);
+        goExercise.setPadding(Ui.dp(c, 4), Ui.dp(c, 6), 0, Ui.dp(c, 6));
+        goExercise.setOnClickListener(v -> activity().openExercise());
+        exerciseRow.addView(goExercise);
+        noteCard.addView(exerciseRow, Ui.matchWrap(10, c));
+        content.addView(noteCard, Ui.matchWrap(12, c));
+
+        // 6. 历史区
+        content.addView(Ui.sectionHeader(c, "历史记录", null, null), Ui.matchWrap(18, c));
         historySubtitle = Ui.text(c, "", 12.5f, Ui.SLATE, false);
         content.addView(historySubtitle, Ui.matchWrap(2, c));
         LinearLayout filterRow = Ui.row(c);
@@ -198,49 +230,47 @@ public class RecordsPage extends BasePage {
         return d;
     }
 
-    private LinearLayout sectionHead(Context c, String badge, String title, String subtitle,
-                                     int badgeBg, int badgeColor) {
-        LinearLayout rowLayout = Ui.row(c);
-        TextView b = Ui.text(c, badge, 12, badgeColor, true);
-        b.setGravity(Gravity.CENTER);
-        b.setBackground(Ui.roundRect(badgeBg, 9, c));
-        b.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(c, 32), Ui.dp(c, 32)));
-        rowLayout.addView(b);
-        LinearLayout texts = Ui.column(c);
-        texts.addView(Ui.text(c, title, 15, Ui.INK, true));
-        texts.addView(Ui.text(c, subtitle, 12, Ui.SLATE, false));
-        LinearLayout.LayoutParams lp = Ui.weight1();
-        lp.leftMargin = Ui.dp(c, 10);
-        rowLayout.addView(texts, lp);
-        return rowLayout;
+    private View dotView(int color) {
+        View dot = new View(ctx());
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(color);
+        dot.setBackground(d);
+        dot.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(ctx(), 8), Ui.dp(ctx(), 8)));
+        return dot;
     }
 
-    /** 在一行网格里加一个数值输入瓷砖, 返回输入框 */
-    private EditText tileInput(LinearLayout form, LinearLayout grid, String label, String hint,
-                               String unit, boolean first) {
+    /** 日常状态一行: 彩色点 + 标签 + 输入 (+单位), 返回输入框 */
+    private EditText statusRow(LinearLayout card, int dotColor, String label, String hint,
+                               String unit, boolean numeric, boolean first) {
         Context c = ctx();
-        LinearLayout box = Ui.column(c);
-        box.setBackground(roundStroke(Color.parseColor("#f8fafc"), 14, Ui.BORDER));
-        int p = Ui.dp(c, 12);
-        box.setPadding(p, p, p, p);
-        box.addView(Ui.text(c, label, 12, Ui.SLATE, true));
-        EditText e = Ui.input(c, hint, InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        e.setBackground(null);
-        e.setTextSize(17);
-        box.addView(e, Ui.matchWrap(2, c));
-        LinearLayout.LayoutParams lp = Ui.weight1();
-        if (!first) lp.leftMargin = Ui.dp(c, 10);
-        grid.addView(box, lp);
+        LinearLayout rowLayout = Ui.row(c);
+        rowLayout.addView(dotView(dotColor));
+        TextView lb = Ui.text(c, label, 13.5f, Ui.INK, true);
+        LinearLayout.LayoutParams lbLp = new LinearLayout.LayoutParams(Ui.dp(c, 62), LinearLayout.LayoutParams.WRAP_CONTENT);
+        lbLp.leftMargin = Ui.dp(c, 8);
+        rowLayout.addView(lb, lbLp);
+        EditText e = Ui.input(c, hint, numeric
+                ? InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL
+                : InputType.TYPE_CLASS_TEXT);
+        rowLayout.addView(e, Ui.weight1());
+        if (unit != null) {
+            TextView u = Ui.text(c, unit, 12, Ui.MUTED, false);
+            LinearLayout.LayoutParams uLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            uLp.leftMargin = Ui.dp(c, 8);
+            rowLayout.addView(u, uLp);
+        }
+        card.addView(rowLayout, Ui.matchWrap(first ? 12 : 10, c));
         return e;
     }
 
-    private TextView habitChip(String name, boolean active) {
+    private TextView habitTile(String name, boolean active) {
         TextView t = Ui.text(ctx(), (active ? "✓ " : "+ ") + name, 13.5f,
-                active ? Color.WHITE : Color.parseColor("#475569"), true);
+                active ? Ui.PRIMARY : Color.parseColor("#475569"), true);
         t.setGravity(Gravity.CENTER);
-        t.setBackground(roundStroke(active ? Ui.PRIMARY : Color.parseColor("#f8fafc"), 999,
-                active ? Ui.PRIMARY : Ui.BORDER));
-        int vp = Ui.dp(ctx(), 8);
+        t.setBackground(Ui.roundRect(active ? Ui.GREEN_SOFT : Ui.SOFT, 12, ctx()));
+        int vp = Ui.dp(ctx(), 12);
         t.setPadding(0, vp, 0, vp);
         return t;
     }
@@ -249,9 +279,8 @@ public class RecordsPage extends BasePage {
         if (habitChips[i] == null) return;
         boolean active = habitSelected[i];
         habitChips[i].setText((active ? "✓ " : "+ ") + HABIT_NAMES[i]);
-        habitChips[i].setTextColor(active ? Color.WHITE : Color.parseColor("#475569"));
-        habitChips[i].setBackground(roundStroke(active ? Ui.PRIMARY : Color.parseColor("#f8fafc"), 999,
-                active ? Ui.PRIMARY : Ui.BORDER));
+        habitChips[i].setTextColor(active ? Ui.PRIMARY : Color.parseColor("#475569"));
+        habitChips[i].setBackground(Ui.roundRect(active ? Ui.GREEN_SOFT : Ui.SOFT, 12, ctx()));
     }
 
     private TextView filterChip(String text, boolean active) {
@@ -400,27 +429,27 @@ public class RecordsPage extends BasePage {
         top.addView(left, Ui.weight1());
         if (!r.isNull("weight")) {
             TextView w = Ui.text(c, fmtNum(r, "weight") + " kg", 16, Ui.PRIMARY, true);
-            w.setBackground(roundStroke(Color.parseColor("#ecfdf5"), 999, Color.parseColor("#ecfdf5")));
+            w.setBackground(Ui.roundRect(Ui.GREEN_SOFT, 999, c));
             int hp = Ui.dp(c, 10), vp = Ui.dp(c, 5);
             w.setPadding(hp, vp, hp, vp);
             top.addView(w);
         }
         card.addView(top);
 
-        // 小标签 (步数/热量/睡眠/运动/腰围/饮水)
-        List<String[]> tags = new ArrayList<>();
-        if (!r.isNull("steps")) tags.add(new String[]{"👟 步数", fmtNum(r, "steps") + " 步"});
-        if (!r.isNull("calories")) tags.add(new String[]{"🔥 消耗", fmtNum(r, "calories") + " kcal"});
-        if (!r.isNull("sleep_hours")) tags.add(new String[]{"🌙 睡眠", fmtNum(r, "sleep_hours") + " h"});
-        if (!r.isNull("workout_minutes")) tags.add(new String[]{"⏱️ 运动", fmtNum(r, "workout_minutes") + " min"});
-        if (!r.isNull("waist_cm")) tags.add(new String[]{"腰围", fmtNum(r, "waist_cm") + " cm"});
-        if (!r.isNull("water_ml")) tags.add(new String[]{"饮水", fmtNum(r, "water_ml") + " ml"});
+        // 小标签 (按指标专属色: 步数绿/消耗橙/睡眠紫/运动蓝/饮水蓝/腰围灰)
+        List<Object[]> tags = new ArrayList<>();
+        if (!r.isNull("steps")) tags.add(new Object[]{"👟 步数", fmtNum(r, "steps") + " 步", Ui.PRIMARY, Ui.GREEN_SOFT});
+        if (!r.isNull("calories")) tags.add(new Object[]{"🔥 消耗", fmtNum(r, "calories") + " kcal", Ui.CAL, Ui.CAL_SOFT});
+        if (!r.isNull("sleep_hours")) tags.add(new Object[]{"🌙 睡眠", fmtNum(r, "sleep_hours") + " h", Ui.SLEEP, Ui.SLEEP_SOFT});
+        if (!r.isNull("workout_minutes")) tags.add(new Object[]{"⏱️ 运动", fmtNum(r, "workout_minutes") + " min", Ui.MOVE, Ui.MOVE_SOFT});
+        if (!r.isNull("waist_cm")) tags.add(new Object[]{"腰围", fmtNum(r, "waist_cm") + " cm", Ui.SLATE, Ui.SOFT});
+        if (!r.isNull("water_ml")) tags.add(new Object[]{"饮水", fmtNum(r, "water_ml") + " ml", Ui.MOVE, Ui.MOVE_SOFT});
         if (!tags.isEmpty()) {
             GridLayout grid = new GridLayout(c);
             grid.setColumnCount(2);
-            for (String[] tag : tags) {
-                TextView t = Ui.text(c, tag[0] + "  " + tag[1], 12, Color.parseColor("#334155"), false);
-                t.setBackground(roundStroke(Color.parseColor("#f8fafc"), 8, Ui.BORDER));
+            for (Object[] tag : tags) {
+                TextView t = Ui.text(c, tag[0] + "  " + tag[1], 12, (Integer) tag[2], true);
+                t.setBackground(Ui.roundRect((Integer) tag[3], 8, c));
                 int hp = Ui.dp(c, 8), vp = Ui.dp(c, 5);
                 t.setPadding(hp, vp, hp, vp);
                 GridLayout.LayoutParams glp = new GridLayout.LayoutParams();

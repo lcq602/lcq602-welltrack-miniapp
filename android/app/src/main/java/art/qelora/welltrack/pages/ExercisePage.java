@@ -9,6 +9,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.GridLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -21,14 +22,16 @@ import java.util.Calendar;
 import java.util.List;
 import java.util.Locale;
 
+import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
 /**
- * 运动页 (对应小程序 pages/exercise, 以覆盖层打开):
- * 录入表单 (日期/类型胶囊/时长/备注) + 历史列表。
- * 数据: GET /api/v1/exercises (返回数组, 用 requestText 解析); 保存: POST /api/v1/exercises。
+ * 运动页 v2 (视觉重构, 对应小程序 pages/exercise, 以覆盖层打开):
+ * 返回栏 → 瑜伽横幅主视觉 → 录入卡 (日期/类型 2×2 瓷砖/时长/备注/整宽保存) →
+ * 历史列表 (彩色圆块 emoji + 时长蓝 pill)。
+ * 数据不变: GET /api/v1/exercises (数组, requestText 解析); POST /api/v1/exercises。
  */
 public class ExercisePage extends BasePage {
     private static final String[] KIND_OPTIONS = {"有氧运动", "力量训练", "步行", "拉伸"};
@@ -130,7 +133,7 @@ public class ExercisePage extends BasePage {
         body.removeAllViews();
         renderBackBar();
         renderHead();
-        renderQuote();
+        renderBanner();
         renderForm();
         renderHistory();
     }
@@ -158,25 +161,12 @@ public class ExercisePage extends BasePage {
         left.addView(eyebrow);
         left.addView(Ui.title(ctx(), "运动打卡"), Ui.matchWrap(6, ctx()));
         head.addView(left, Ui.weight1());
-        head.addView(pill("活力充沛", Color.parseColor("#dbeafe"), Color.parseColor("#2563eb")));
+        head.addView(pill("活力充沛", Ui.MOVE_SOFT, Ui.MOVE));
         body.addView(head, Ui.matchWrap(8, ctx()));
     }
 
-    private void renderQuote() {
-        LinearLayout card = Ui.card(ctx());
-        LinearLayout row = Ui.row(ctx());
-        TextView spark = Ui.text(ctx(), "⚡", 22, Ui.INK, false);
-        spark.setGravity(Gravity.CENTER);
-        spark.setBackground(Ui.roundRect(Color.parseColor("#fef3c7"), 12, ctx()));
-        int sz = Ui.dp(ctx(), 44);
-        row.addView(spark, new LinearLayout.LayoutParams(sz, sz));
-        LinearLayout copy = Ui.column(ctx());
-        copy.addView(Ui.text(ctx(), "动一动，就是进展", 14, Ui.INK, true));
-        copy.addView(Ui.text(ctx(), "散步、力量、拉伸或快走，只要身体动起来，代谢与心肺就在积极响应。", 12, Ui.SLATE, false), Ui.matchWrap(4, ctx()));
-        LinearLayout.LayoutParams cl = Ui.weight1(); cl.leftMargin = Ui.dp(ctx(), 10);
-        row.addView(copy, cl);
-        card.addView(row);
-        body.addView(card, Ui.matchWrap(12, ctx()));
+    private void renderBanner() {
+        body.addView(Ui.bannerImage(ctx(), R.drawable.img_plan, 130, 24), Ui.matchWrap(12, ctx()));
     }
 
     private void renderForm() {
@@ -212,23 +202,26 @@ public class ExercisePage extends BasePage {
         dateRow.addView(cal, calLp);
         card.addView(dateRow, Ui.matchWrap(6, ctx()));
 
-        // 类型胶囊
+        // 类型: 2×2 瓷砖选择 (选中绿底白字)
         card.addView(fieldLabel("活动类型"), Ui.matchWrap(12, ctx()));
-        LinearLayout chips = Ui.row(ctx());
+        GridLayout kindGrid = new GridLayout(ctx());
+        kindGrid.setColumnCount(2);
         for (int i = 0; i < KIND_OPTIONS.length; i++) {
             final int idx = i;
             boolean active = idx == kindIndex;
-            TextView chip = Ui.text(ctx(), KIND_OPTIONS[i], 13, active ? Color.WHITE : Ui.SLATE, active);
-            chip.setGravity(Gravity.CENTER);
-            chip.setBackground(Ui.roundRect(active ? Ui.PRIMARY : Ui.SOFT, 10, ctx()));
-            int cv = Ui.dp(ctx(), 9);
-            chip.setPadding(0, cv, 0, cv);
-            chip.setOnClickListener(v -> { kindIndex = idx; render(); });
-            LinearLayout.LayoutParams lp = Ui.weight1();
-            if (i > 0) lp.leftMargin = Ui.dp(ctx(), 6);
-            chips.addView(chip, lp);
+            TextView tile = Ui.text(ctx(), KIND_OPTIONS[i], 14, active ? Color.WHITE : Ui.SLATE, true);
+            tile.setGravity(Gravity.CENTER);
+            tile.setBackground(Ui.roundRect(active ? Ui.PRIMARY : Ui.SOFT, 12, ctx()));
+            int tv = Ui.dp(ctx(), 13);
+            tile.setPadding(0, tv, 0, tv);
+            tile.setOnClickListener(v -> { kindIndex = idx; render(); });
+            GridLayout.LayoutParams glp = new GridLayout.LayoutParams();
+            glp.width = 0;
+            glp.columnSpec = GridLayout.spec(i % 2, 1f);
+            glp.setMargins(Ui.dp(ctx(), 3), Ui.dp(ctx(), 3), Ui.dp(ctx(), 3), Ui.dp(ctx(), 3));
+            kindGrid.addView(tile, glp);
         }
-        card.addView(chips, Ui.matchWrap(6, ctx()));
+        card.addView(kindGrid, Ui.matchWrap(6, ctx()));
 
         // 时长
         LinearLayout tile = Ui.column(ctx());
@@ -279,7 +272,7 @@ public class ExercisePage extends BasePage {
         titles.addView(Ui.sectionTitle(ctx(), "活动历史"));
         titles.addView(Ui.text(ctx(), "共累计 " + items.size() + " 次健康活动", 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
         head.addView(titles, Ui.weight1());
-        head.addView(pill("运动日志", Color.parseColor("#dbeafe"), Color.parseColor("#2563eb")));
+        head.addView(pill("运动日志", Ui.MOVE_SOFT, Ui.MOVE));
         body.addView(head, Ui.matchWrap(16, ctx()));
 
         if (!items.isEmpty()) {
@@ -327,13 +320,13 @@ public class ExercisePage extends BasePage {
         TextView sq = Ui.text(ctx(), icon, 20, Ui.INK, false);
         sq.setGravity(Gravity.CENTER);
         sq.setBackground(Ui.roundRect("力量训练".equals(kind)
-                ? Color.parseColor("#fef3c7") : Color.parseColor("#dbeafe"), 12, ctx()));
+                ? Color.parseColor("#fef3c7") : Ui.MOVE_SOFT, 12, ctx()));
         int sz = Ui.dp(ctx(), 44);
         row.addView(sq, new LinearLayout.LayoutParams(sz, sz));
         LinearLayout info = Ui.column(ctx());
         LinearLayout nameRow = Ui.row(ctx());
         nameRow.addView(Ui.text(ctx(), kind, 14, Ui.INK, true));
-        TextView tag = pill(minutes + " 分钟", Ui.SOFT, Ui.SLATE);
+        TextView tag = pill(minutes + " 分钟", Ui.MOVE_SOFT, Ui.MOVE);
         LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         tl.leftMargin = Ui.dp(ctx(), 6);
