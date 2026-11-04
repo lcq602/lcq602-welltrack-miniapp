@@ -14,7 +14,9 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
@@ -37,8 +39,10 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import art.qelora.welltrack.MainActivity;
 import art.qelora.welltrack.api.ApiClient;
@@ -57,6 +61,8 @@ import art.qelora.welltrack.ui.Ui;
  * 时长写入 sleep_hours 随记录保存; 入睡/起床时刻仅存本机 SharedPreferences,
  * 不新增后端字段); 对照行复用 records 列表的 mihealth_sleep_hours
  * (Worker 合并口径, FastAPI 记录列表无此字段时对照行自动隐藏, 不误报)。
+ * v2.9 饮食体验: 食物选择对话框新增搜索框 (按名过滤, 收藏/最近优先排序) 与
+ * 收藏星标、最近使用置顶段, 最近与收藏仅存本机 SharedPreferences, 不改后端。
  */
 public class RecordsPage extends BasePage {
     private static final String[] HABIT_NAMES = {"运动", "均衡饮食", "喝够水", "按时睡眠", "减少久坐"};
@@ -752,7 +758,133 @@ public class RecordsPage extends BasePage {
         }
     }
 
-    /* ----- 选择食物: 列表对话框 → 份量对话框 ----- */
+    /* ----- v2.9 饮食体验: 搜索过滤 + 最近使用/收藏置顶 (仅存本机, 不改后端) ----- */
+    private SharedPreferences foodPrefs() {
+        return ctx().getSharedPreferences("welltrack_foods", Context.MODE_PRIVATE);
+    }
+
+    /** 以 "|" 连接的有序名册 (食物名不含 "|", 最近用它保序, 收藏用它去重) */
+    private List<String> foodNameList(String key) {
+        List<String> out = new ArrayList<>();
+        String raw = foodPrefs().getString(key, "");
+        if (raw == null || raw.isEmpty()) return out;
+        for (String s : raw.split("\\|")) {
+            if (!s.isEmpty() && !out.contains(s)) out.add(s);
+        }
+        return out;
+    }
+
+    private void saveFoodNameList(String key, List<String> names) {
+        StringBuilder sb = new StringBuilder();
+        for (String n : names) {
+            if (sb.length() > 0) sb.append("|");
+            sb.append(n);
+        }
+        foodPrefs().edit().putString(key, sb.toString()).apply();
+    }
+
+    /** 记入最近使用: 置顶、去重、最多保留 8 个 (在份量确认时调用, 只记成功确认的) */
+    private void recordRecentFood(String name) {
+        List<String> recent = foodNameList("recent");
+        recent.remove(name);
+        recent.add(0, name);
+        while (recent.size() > 8) recent.remove(recent.size() - 1);
+        saveFoodNameList("recent", recent);
+    }
+
+    private Set<String> foodFavorites() {
+        return new LinkedHashSet<>(foodNameList("favorites"));
+    }
+
+    private void toggleFavoriteFood(String name) {
+        List<String> fav = foodNameList("favorites");
+        if (fav.contains(name)) fav.remove(name);
+        else fav.add(name);
+        saveFoodNameList("favorites", fav);
+    }
+
+    private Foods.Food findFood(String name) {
+        for (Foods.Food f : Foods.ALL) {
+            if (f.name.equals(name)) return f;
+        }
+        return null;
+    }
+
+    private LinearLayout foodRow(final Foods.Food food, final AlertDialog[] holder,
+                                 final Runnable refresh) {
+        Context c = ctx();
+        LinearLayout rowLayout = Ui.row(c);
+        rowLayout.setBackground(roundStroke(Ui.SOFT, 10, Ui.BORDER));
+        int hp = Ui.dp(c, 12), vp = Ui.dp(c, 10);
+        rowLayout.setPadding(hp, vp, hp, vp);
+        rowLayout.addView(Ui.text(c, food.emoji + "  " + food.name, 14.5f, Ui.INK, true), Ui.weight1());
+        rowLayout.addView(Ui.text(c, food.kcalPer100g + " 千卡/100g", 12, Ui.SLATE, false));
+        final boolean fav = foodFavorites().contains(food.name);
+        TextView star = Ui.text(c, fav ? " ★ " : " ☆ ", 17, fav ? Ui.LIME : Ui.MUTED, true);
+        star.setPadding(Ui.dp(c, 6), 0, 0, 0);
+        star.setOnClickListener(v -> {
+            toggleFavoriteFood(food.name);
+            if (refresh != null) refresh.run();
+        });
+        rowLayout.addView(star);
+        rowLayout.setOnClickListener(v -> {
+            if (holder[0] != null) holder[0].dismiss();
+            showPortionDialog(food);
+        });
+        return rowLayout;
+    }
+
+    /** 按当前搜索词重绘食物列表: 无搜索词时分「收藏 / 最近使用 / 全部」三段, 有词时过滤并把收藏与最近排前面 */
+    private void renderFoodList(LinearLayout list, String query, final AlertDialog[] holder,
+                                final Runnable refresh) {
+        Context c = ctx();
+        list.removeAllViews();
+        String q = query == null ? "" : query.trim();
+        Set<String> fav = foodFavorites();
+        List<String> recent = foodNameList("recent");
+        List<Foods.Food> matched = new ArrayList<>();
+        for (Foods.Food f : Foods.ALL) {
+            if (q.isEmpty() || f.name.contains(q)) matched.add(f);
+        }
+        if (!q.isEmpty()) {
+            // 收藏优先, 其次最近使用, 其余保持原顺序
+            matched.sort((a, b) -> {
+                int ra = fav.contains(a.name) ? 0 : (recent.contains(a.name) ? 1 : 2);
+                int rb = fav.contains(b.name) ? 0 : (recent.contains(b.name) ? 1 : 2);
+                return ra != rb ? ra - rb : 0;
+            });
+            list.addView(Ui.label(c, "找到 " + matched.size() + " 个结果（★ 为收藏，点星可收藏/取消）"),
+                    Ui.matchWrap(4, c));
+            if (matched.isEmpty()) {
+                list.addView(Ui.text(c, "没有匹配的食物，换个关键词试试，或用拍照识别记一餐。",
+                        13, Ui.MUTED, false), Ui.matchWrap(8, c));
+            }
+            for (Foods.Food f : matched) list.addView(foodRow(f, holder, refresh), Ui.matchWrap(6, c));
+            return;
+        }
+        if (!fav.isEmpty()) {
+            list.addView(Ui.text(c, "★ 收藏", 13, Ui.LIME, true), Ui.matchWrap(4, c));
+            for (String name : fav) {
+                Foods.Food f = findFood(name);
+                if (f != null) list.addView(foodRow(f, holder, refresh), Ui.matchWrap(6, c));
+            }
+        }
+        if (!recent.isEmpty()) {
+            list.addView(Ui.text(c, "🕐 最近使用", 13, Ui.SLATE, true), Ui.matchWrap(4, c));
+            for (String name : recent) {
+                if (fav.contains(name)) continue; // 已在收藏段出现过, 不重复
+                Foods.Food f = findFood(name);
+                if (f != null) list.addView(foodRow(f, holder, refresh), Ui.matchWrap(6, c));
+            }
+        }
+        list.addView(Ui.text(c, "全部食物", 13, Ui.SLATE, true), Ui.matchWrap(4, c));
+        for (Foods.Food f : Foods.ALL) {
+            if (fav.contains(f.name) || recent.contains(f.name)) continue; // 置顶段已出现
+            list.addView(foodRow(f, holder, refresh), Ui.matchWrap(6, c));
+        }
+    }
+
+    /* ----- 选择食物: 搜索框 + 列表对话框 → 份量对话框 ----- */
     private void showFoodPicker() {
         Context c = ctx();
         LinearLayout list = Ui.column(c);
@@ -762,22 +894,30 @@ public class RecordsPage extends BasePage {
         ScrollView sv = new ScrollView(c);
         sv.addView(list);
         final AlertDialog[] holder = new AlertDialog[1];
-        for (final Foods.Food food : Foods.ALL) {
-            LinearLayout rowLayout = Ui.row(c);
-            rowLayout.setBackground(roundStroke(Ui.SOFT, 10, Ui.BORDER));
-            int hp = Ui.dp(c, 12), vp = Ui.dp(c, 10);
-            rowLayout.setPadding(hp, vp, hp, vp);
-            rowLayout.addView(Ui.text(c, food.emoji + "  " + food.name, 14.5f, Ui.INK, true), Ui.weight1());
-            rowLayout.addView(Ui.text(c, food.kcalPer100g + " 千卡/100g", 12, Ui.SLATE, false));
-            rowLayout.setOnClickListener(v -> {
-                if (holder[0] != null) holder[0].dismiss();
-                showPortionDialog(food);
-            });
-            list.addView(rowLayout, Ui.matchWrap(6, c));
-        }
+        final EditText[] searchHolder = new EditText[1];
+        final Runnable[] refreshHolder = new Runnable[1];
+        refreshHolder[0] = () -> renderFoodList(list,
+                searchHolder[0] == null ? "" : searchHolder[0].getText().toString(),
+                holder, refreshHolder[0]);
+        renderFoodList(list, "", holder, refreshHolder[0]);
+        EditText search = Ui.input(c, "搜索食物，如：米饭 / 鸡胸", InputType.TYPE_CLASS_TEXT);
+        searchHolder[0] = search;
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int st, int cnt, int aft) {}
+            @Override public void onTextChanged(CharSequence s, int st, int b, int cnt) {}
+            @Override public void afterTextChanged(Editable s) {
+                refreshHolder[0].run();
+            }
+        });
+        LinearLayout box = Ui.column(c);
+        box.setBackgroundColor(Ui.CARD);
+        box.addView(search, Ui.matchWrap(6, c));
+        LinearLayout.LayoutParams svLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(c, 420));
+        box.addView(sv, svLp);
         holder[0] = new AlertDialog.Builder(c)
                 .setTitle("选择食物")
-                .setView(sv)
+                .setView(box)
                 .setNegativeButton("取消", null)
                 .show();
     }
@@ -835,8 +975,10 @@ public class RecordsPage extends BasePage {
         new AlertDialog.Builder(c)
                 .setTitle("这一份有多重？")
                 .setView(box)
-                .setPositiveButton("记入今日", (d, w) ->
-                        addDietEntry(food.name, grams[0], Foods.kcalFor(food, grams[0]), "manual"))
+                .setPositiveButton("记入今日", (d, w) -> {
+                    recordRecentFood(food.name);
+                    addDietEntry(food.name, grams[0], Foods.kcalFor(food, grams[0]), "manual");
+                })
                 .setNegativeButton("取消", null)
                 .show();
     }
