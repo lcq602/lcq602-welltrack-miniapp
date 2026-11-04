@@ -17,7 +17,7 @@ from .config import CORS_ORIGINS, LOCAL_AUTH_ENABLED, MIHEALTH_ENABLED, MIHEALTH
 from .db import initialize, read_connection, transaction
 from .integrations.mihealth import MiHealthChallenge, MiHealthError, MiHealthVerificationError, connect_mihealth, decrypt_session, encrypt_session, read_mihealth_metrics, read_mihealth_weight_page, read_mihealth_weight_window, refresh_mihealth_session, validate_session_key, verify_mihealth_challenge
 from .integrations.vendor.client import AuthError
-from .schemas import ExerciseIn, MiHealthConnectIn, MiHealthSyncIn, MiHealthVerifyIn, ProfileIn, RecordIn, WechatLoginIn
+from .schemas import DietIn, ExerciseIn, MiHealthConnectIn, MiHealthSyncIn, MiHealthVerifyIn, ProfileIn, RecordIn, WechatLoginIn
 
 MIHEALTH_WEIGHT_SYNC_INTERVAL_SECONDS = 60
 MIHEALTH_BACKFILL_PAGES_PER_RUN = 20
@@ -600,11 +600,14 @@ def dashboard(uid: str = Depends(user_id)):
         "healthy_habits": ["安排运动", "记录饮食", "记录饮水与睡眠", "减少久坐"],
     }
     mi = mihealth_status(uid)
+    with read_connection() as conn:
+        diet_row = conn.execute("SELECT COUNT(*) AS c, COALESCE(SUM(calories_kcal),0) AS s FROM diet_entries WHERE user_id=? AND entry_date=?", (uid, str(today))).fetchone()
+    diet_today = {"total_kcal": round(float(diet_row["s"]), 1), "count": diet_row["c"]}
     return {
         "profile": p, "today": str(today), "current_weight": latest_weight, "current_weight_source": weight_source, "target_weight": p["target_weight"] if p else None,
         "progress": progress, "bmi": bmi, "bmi_label": "仅供参考，不用于诊断", "records": records,
         "exercise_count_7d": exercise_count, "record_days_7d": len(manual_records), "weekly_completion": min(100, round(len(manual_records) / 7 * 100)),
-        "todos": todos[goal], "configured": bool(p and p["configured"]),
+        "todos": todos[goal], "configured": bool(p and p["configured"]), "diet_today": diet_today,
         "mihealth": {
             "connected": mi["connected"],
             "last_synced_at": mi["last_synced_at"],
@@ -746,6 +749,36 @@ def create_exercise(payload: ExerciseIn, uid: str = Depends(user_id)):
     result.pop("user_id", None)
     return result
 
+@app.post("/api/v1/diet", status_code=201)
+def create_diet(payload: DietIn, uid: str = Depends(user_id)):
+    """新增一条饮食记录 (手动选择或拍照识别确认后)。"""
+    with transaction() as conn:
+        cur = conn.execute("INSERT INTO diet_entries(user_id,entry_date,name,grams,calories_kcal,source) VALUES(?,?,?,?,?,?)",
+                           (uid, str(payload.entry_date), payload.name, payload.grams, payload.calories_kcal, payload.source))
+        row = conn.execute("SELECT id,entry_date,name,grams,calories_kcal,source,created_at FROM diet_entries WHERE id=? AND user_id=?", (cur.lastrowid, uid)).fetchone()
+    return dict(row)
+
+@app.get("/api/v1/diet")
+def list_diet(date_str: str | None = Query(default=None, alias="date"), uid: str = Depends(user_id)):
+    """按日期列出饮食记录与当日摄入合计。"""
+    day = date_str or str(date.today())
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        raise HTTPException(422, "日期格式不正确")
+    with read_connection() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT id,entry_date,name,grams,calories_kcal,source,created_at FROM diet_entries WHERE user_id=? AND entry_date=? ORDER BY id", (uid, day))]
+    return {"date": day, "entries": rows, "total_kcal": round(sum(r["calories_kcal"] for r in rows), 1), "count": len(rows)}
+
+@app.delete("/api/v1/diet/{entry_id}")
+def delete_diet(entry_id: int, uid: str = Depends(user_id)):
+    """删除一条饮食记录。"""
+    with transaction() as conn:
+        cur = conn.execute("DELETE FROM diet_entries WHERE id=? AND user_id=?", (entry_id, uid))
+        if cur.rowcount == 0:
+            raise HTTPException(404, "饮食记录不存在")
+    return {"ok": True}
+
 @app.get("/api/v1/analytics")
 def analytics(period: str = Query("week", pattern="^(week|month|calendar)$"), month: str | None = Query(default=None, min_length=7, max_length=7, pattern="^\\d{4}-(0[1-9]|1[0-2])$"), uid: str = Depends(user_id)):
     """按周或月聚合体重、腰围、运动、步数、卡路里和睡眠数据。"""
@@ -864,5 +897,7 @@ def backup(uid: str = Depends(user_id)):
         )]
     for item in mihealth:
         item["payload"] = json.loads(item["payload"] or "{}")
-    return {"version": 1, "profile": get_profile(uid), "records": records, "exercises": exercises, "mihealth_data": mihealth}
+    with read_connection() as conn:
+        diet = [dict(r) for r in conn.execute("SELECT entry_date,name,grams,calories_kcal,source FROM diet_entries WHERE user_id=? ORDER BY entry_date, id", (uid,))]
+    return {"version": 1, "profile": get_profile(uid), "records": records, "exercises": exercises, "mihealth_data": mihealth, "diet_entries": diet}
 

@@ -59,3 +59,10 @@ CREATE TABLE IF NOT EXISTS agent_cache (
  content TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY (user_id, cache_date, kind)
 );
+CREATE TABLE IF NOT EXISTS diet_entries (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+ entry_date TEXT NOT NULL, name TEXT NOT NULL, grams REAL,
+ calories_kcal REAL NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'manual',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_diet_user_date ON diet_entries(user_id, entry_date);

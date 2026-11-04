@@ -1,6 +1,7 @@
 package art.qelora.welltrack;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -38,6 +39,29 @@ public class MainActivity extends Activity {
     private LinearLayout[] tabItems;
     private ImageView[] tabIconViews;
     private TextView[] tabLabelViews;
+
+    /** 页面级 ActivityResult 监听 (如记录页选图/拍照): 页面 onShow 注册、onHide 注销 */
+    public interface ActivityResultListener {
+        void onActivityResult(int requestCode, int resultCode, Intent data);
+    }
+
+    private ActivityResultListener activityResultListener;
+
+    public void setActivityResultListener(ActivityResultListener listener) {
+        this.activityResultListener = listener;
+    }
+
+    public void clearActivityResultListener(ActivityResultListener listener) {
+        if (this.activityResultListener == listener) this.activityResultListener = null;
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (activityResultListener != null) {
+            activityResultListener.onActivityResult(requestCode, resultCode, data);
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

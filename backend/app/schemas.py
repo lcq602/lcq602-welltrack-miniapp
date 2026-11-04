@@ -49,6 +49,14 @@ class ExerciseIn(BaseModel):
     duration_minutes: int = Field(ge=1, le=1440)
     note: str = Field(default="", max_length=1000)
 
+class DietIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entry_date: date
+    name: str = Field(min_length=1, max_length=60)
+    grams: float | None = Field(default=None, gt=0, le=5000)
+    calories_kcal: float = Field(ge=0, le=10000)
+    source: str = Field(default="manual", pattern="^(manual|photo)$")
+
 class WechatLoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str = Field(min_length=1, max_length=256)

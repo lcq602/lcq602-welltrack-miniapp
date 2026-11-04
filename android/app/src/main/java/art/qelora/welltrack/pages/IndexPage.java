@@ -653,16 +653,25 @@ public class IndexPage extends BasePage {
         return box;
     }
 
-    /* 三瓷砖: 饮食记录 (今日饮水) / 有氧运动 (今日运动分钟) / 身体数据 (最新体重, 点击去记录页) */
+    /* 三瓷砖: 饮食记录 (今日摄入热量, dashboard.diet_today; 缺失时回退今日饮水) /
+       有氧运动 (今日运动分钟) / 身体数据 (最新体重, 点击去记录页) */
     private LinearLayout renderTopTiles() {
         Context c = ctx();
         LinearLayout row = Ui.row(c);
         row.setGravity(Gravity.TOP);
         JSONObject todayRec = recordByDateMap.get(todayString());
-        Double water = todayRec != null ? num(todayRec, "water_ml") : null;
-        row.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "🍽️", "饮食记录",
-                water != null ? fmt(water) : "—",
-                water != null ? "今日饮水 · ml" : "今日未记录", -1), tile3Lp(true, false));
+        JSONObject dietToday = data != null ? data.optJSONObject("diet_today") : null;
+        if (dietToday != null) {
+            double totalKcal = dietToday.optDouble("total_kcal", 0);
+            int dietCount = dietToday.optInt("count", 0);
+            row.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "🍽️", "饮食记录",
+                    fmt(totalKcal) + " kcal", "今日 " + dietCount + " 项", -1), tile3Lp(true, false));
+        } else {
+            Double water = todayRec != null ? num(todayRec, "water_ml") : null;
+            row.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "🍽️", "饮食记录",
+                    water != null ? fmt(water) : "—",
+                    water != null ? "今日饮水 · ml" : "今日未记录", -1), tile3Lp(true, false));
+        }
         Double wm = todayRec != null ? num(todayRec, "workout_minutes") : null;
         int mins = wm != null ? (int) Math.round(wm) : todayDay.workoutMinutes;
         row.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "🏃", "有氧运动",

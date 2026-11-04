@@ -102,6 +102,8 @@ export default {
 
       // 以下均需会话
       const uid = await userId(request, env);
+      const dietDel = path.match(/^\/api\/v1\/diet\/(\d+)$/);
+      if (request.method === "DELETE" && dietDel) return await deleteDiet(env, uid, Number(dietDel[1]));
       switch (route) {
         case "GET /api/v1/profile": return json(await getProfile(env, uid));
         case "POST /api/v1/profile": return await saveProfile(request, env, uid);
@@ -119,6 +121,9 @@ export default {
         case "POST /api/v1/integrations/mihealth/verify": return mihealthStage2();
         case "POST /api/v1/integrations/mihealth/sync": return await mihealthSync(env, uid);
         case "DELETE /api/v1/integrations/mihealth/connection": return await mihealthUnbind(env, uid);
+        case "GET /api/v1/diet": return await listDiet(env, uid, url);
+        case "POST /api/v1/diet": return await createDiet(request, env, uid);
+        case "POST /api/v1/agent/food-photo": return await foodPhoto(request, env, uid);
         case "POST /api/v1/agent/chat": return await agentChat(request, env, uid);
         case "GET /api/v1/agent/daily-insight": return await agentDailyInsight(env, uid);
         case "GET /api/v1/agent/plan": return await agentPlan(request, env, uid);
@@ -439,13 +444,15 @@ async function dashboard(env, uid) {
     healthy_habits: ["安排运动", "记录饮食", "记录饮水与睡眠", "减少久坐"],
   };
   const mi = await mihealthStatus(env, uid);
+  const dietRow = await env.DB.prepare("SELECT COUNT(*) AS c, COALESCE(SUM(calories_kcal),0) AS s FROM diet_entries WHERE user_id=? AND entry_date=?").bind(uid, today).first();
+  const dietToday = { total_kcal: round1(dietRow ? dietRow.s : 0), count: dietRow ? dietRow.c : 0 };
   return {
     profile: p, today, current_weight: latestWeight, current_weight_source: weightSource,
     target_weight: p ? p.target_weight : null,
     progress, bmi, bmi_label: "仅供参考，不用于诊断", records,
     exercise_count_7d: exRow ? exRow.n : 0, record_days_7d: manualRecords.length,
     weekly_completion: Math.min(100, Math.round(manualRecords.length / 7 * 100)),
-    todos: todosMap[goal], configured: Boolean(p && p.configured),
+    todos: todosMap[goal], configured: Boolean(p && p.configured), diet_today: dietToday,
     mihealth: { connected: mi.connected, last_synced_at: mi.last_synced_at, today: mi.today, latest: mi.latest },
   };
 }
@@ -569,18 +576,20 @@ async function backup(env, uid) {
 const { results: recRows} = await env.DB.prepare("SELECT * FROM daily_records WHERE user_id=? ORDER BY record_date").bind(uid).all();
 const { results: exRows} = await env.DB.prepare("SELECT exercise_date,kind,duration_minutes,note FROM exercises WHERE user_id=? ORDER BY exercise_date").bind(uid).all();
 const { results: miRows} = await env.DB.prepare("SELECT source_id,metric,recorded_at,value,unit,payload FROM mihealth_imports WHERE user_id=? ORDER BY recorded_at").bind(uid).all();
+const { results: dietRows} = await env.DB.prepare("SELECT entry_date,name,grams,calories_kcal,source FROM diet_entries WHERE user_id=? ORDER BY entry_date, id").bind(uid).all();
 return {
 version: 1,
 profile: await getProfile(env, uid),
 records: recRows.map(recordOut),
 exercises: exRows,
 mihealth_data: miRows.map((r) => ({...r, payload: parseJson(r.payload, {})})),
+diet_entries: dietRows,
 };
 }
 // 从旧后端 /api/v1/backup 的 JSON 导入 (数据迁移用): 幂等, 记录按日期 INSERT OR REPLACE
 async function importBackup(request, env, uid) {
 const b = await request.json().catch(() => ({}));
-let counts = { profile: 0, records: 0, exercises: 0, mihealth_data: 0};
+let counts = { profile: 0, records: 0, exercises: 0, mihealth_data: 0, diet_entries: 0};
 if (b.profile && typeof b.profile === "object" && b.profile.height_cm) {
 await env.DB.prepare(
 "INSERT INTO profile_versions(user_id,height_cm,current_weight,target_weight,start_date,goal,target_date,weekly_plan,reminder_settings) VALUES(?,?,?,?,?,?,?,?,?)"
@@ -621,7 +630,83 @@ await env.DB.prepare(
 ).bind(uid).run();
 }
 }
+if (Array.isArray(b.diet_entries)) {
+for (const d of b.diet_entries) {
+if (!isDateStr(d.entry_date) || !d.name) continue;
+await env.DB.prepare("INSERT INTO diet_entries(user_id,entry_date,name,grams,calories_kcal,source) VALUES(?,?,?,?,?,?)")
+.bind(uid, d.entry_date, String(d.name).slice(0, 60), d.grams ?? null, Number(d.calories_kcal) || 0, d.source === "photo" ? "photo" : "manual").run();
+counts.diet_entries++;
+}
+}
 return json({ ok: true, imported: counts});
+}
+
+// ---------- 饮食记录 ----------
+async function createDiet(request, env, uid) {
+  const b = await request.json().catch(() => ({}));
+  if (!isDateStr(b.entry_date)) throw httpErr(422, "日期格式不正确");
+  const name = typeof b.name === "string" ? b.name.trim() : "";
+  if (!name || name.length > 60) throw httpErr(422, "食物名称不合法");
+  const kcal = Number(b.calories_kcal);
+  if (!Number.isFinite(kcal) || kcal < 0 || kcal > 10000) throw httpErr(422, "热量不合法");
+  const grams = b.grams === null || b.grams === undefined ? null : Number(b.grams);
+  if (grams !== null && (!Number.isFinite(grams) || grams <= 0 || grams > 5000)) throw httpErr(422, "重量不合法");
+  const source = b.source === "photo" ? "photo" : "manual";
+  const res = await env.DB.prepare("INSERT INTO diet_entries(user_id,entry_date,name,grams,calories_kcal,source) VALUES(?,?,?,?,?,?)")
+    .bind(uid, b.entry_date, name, grams, kcal, source).run();
+  const row = await env.DB.prepare("SELECT id,entry_date,name,grams,calories_kcal,source,created_at FROM diet_entries WHERE id=? AND user_id=?")
+    .bind(res.meta.last_row_id, uid).first();
+  return json(row, 201);
+}
+
+async function listDiet(env, uid, url) {
+  const day = url.searchParams.get("date") || todayStr();
+  if (!isDateStr(day)) throw httpErr(422, "日期格式不正确");
+  const { results } = await env.DB.prepare("SELECT id,entry_date,name,grams,calories_kcal,source,created_at FROM diet_entries WHERE user_id=? AND entry_date=? ORDER BY id").bind(uid, day).all();
+  const total = results.reduce((a, r) => a + (r.calories_kcal || 0), 0);
+  return json({ date: day, entries: results, total_kcal: round1(total), count: results.length });
+}
+
+async function deleteDiet(env, uid, id) {
+  const res = await env.DB.prepare("DELETE FROM diet_entries WHERE id=? AND user_id=?").bind(id, uid).run();
+  if (!res.meta.changes) throw httpErr(404, "饮食记录不存在");
+  return json({ ok: true });
+}
+
+// ---------- 拍照识别热量 (Workers AI 视觉模型) ----------
+// 方案与 GitHub 主流开源实现一致: 视觉大模型一次调用输出结构化 JSON (食物/克数/热量),
+// 总热量由服务端代码重算, 不信任模型给的总数; 结果仅作估算, 由用户在 App 内确认修改后才入账。
+const FOOD_PHOTO_SYSTEM = `你是食物识别与营养估算助手。识别照片中的每一种食物, 估算每种的重量 (克) 与热量 (千卡)。
+只输出一个 JSON 对象, 不要输出任何其他文字或 Markdown 标记:
+{"items":[{"name":"食物名","grams":150,"calories_kcal":200}],"note":"一句话说明识别把握与不确定处"}
+要求: 同种食物只出现一次; 克数按照片中实际份量估算 (参考餐具大小); 热量按常见做法估算; 看不清的食物不要编造, 在 note 中说明。`;
+
+async function foodPhoto(request, env, uid) {
+  const b = await request.json().catch(() => ({}));
+  const b64 = typeof b.image_base64 === "string" ? b.image_base64 : "";
+  if (!b64 || b64.length < 1000) throw httpErr(422, "图片数据不完整");
+  if (b64.length > 2_800_000) throw httpErr(413, "图片过大, 请压缩后重试");
+  let bytes;
+  try {
+    const bin = atob(b64.replace(/\s/g, ""));
+    bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  } catch (e) { throw httpErr(422, "图片解码失败"); }
+  const model = env.VISION_MODEL || "@cf/meta/llama-3.2-11b-vision-instruct";
+  const result = await env.AI.run(model, { image: Array.from(bytes), prompt: FOOD_PHOTO_SYSTEM + "\n\n请识别这张照片里的食物。", max_tokens: 900, temperature: 0.2 });
+  const text = String((result && (result.response || result.description || result.text)) || "");
+  let raw = null;
+  const start = text.indexOf("{"), end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) { try { raw = JSON.parse(text.slice(start, end + 1)); } catch (e) { raw = null; } }
+  if (!raw || !Array.isArray(raw.items)) throw httpErr(502, "没有识别出食物, 换个角度或更近一点再拍");
+  const items = raw.items.filter((it) => it && typeof it.name === "string" && it.name.trim()).slice(0, 12).map((it) => ({
+    name: String(it.name).trim().slice(0, 40),
+    grams: Number.isFinite(Number(it.grams)) ? Math.min(3000, Math.max(1, Math.round(Number(it.grams)))) : null,
+    calories_kcal: Number.isFinite(Number(it.calories_kcal)) ? Math.min(5000, Math.max(0, Math.round(Number(it.calories_kcal)))) : 0,
+  }));
+  if (!items.length) throw httpErr(502, "没有识别出食物, 换个角度或更近一点再拍");
+  const total = items.reduce((a, it) => a + it.calories_kcal, 0);
+  return json({ items, total_kcal: total, note: typeof raw.note === "string" ? raw.note.slice(0, 200) : "", model });
 }
 
 // ---------- 智能体 (Workers AI) ----------

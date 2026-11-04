@@ -1,24 +1,35 @@
 package art.qelora.welltrack.pages;
 
+import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DatePickerDialog;
 import android.content.Context;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Environment;
+import android.provider.MediaStore;
 import android.text.InputType;
+import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.GridLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -27,7 +38,9 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
+import art.qelora.welltrack.MainActivity;
 import art.qelora.welltrack.api.ApiClient;
+import art.qelora.welltrack.health.Foods;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
@@ -57,6 +70,23 @@ public class RecordsPage extends BasePage {
     private boolean hasLoaded = false;
     private boolean saving = false;
     private boolean alreadySaved = false;
+
+    /* v2.3 饮食记录: 今日条目列表 + 合计 (接口 /api/v1/diet) */
+    private static final int REQ_GALLERY = 4101;
+    private static final int REQ_CAMERA = 4102;
+    private LinearLayout dietListBox;
+    private TextView dietSummaryView;
+    private final List<JSONObject> dietEntries = new ArrayList<>();
+    private AlertDialog photoProgressDialog;
+
+    /** 选图/拍照结果监听: onShow 注册到 MainActivity, onHide 注销 */
+    private final MainActivity.ActivityResultListener resultListener =
+            new MainActivity.ActivityResultListener() {
+                @Override
+                public void onActivityResult(int requestCode, int resultCode, Intent data) {
+                    handleActivityResult(requestCode, resultCode, data);
+                }
+            };
 
     public RecordsPage(Context ctx) {
         super(ctx);
@@ -154,6 +184,27 @@ public class RecordsPage extends BasePage {
         dietInput = statusRow(statusCard, Ui.CAL, "饮食简记", "例如：三餐规律，晚餐蔬菜过半，无夜宵", null, false, false);
         content.addView(statusCard, Ui.matchWrap(12, c));
 
+        // 3.5 饮食记录卡 (v2.3): 今日条目 + 合计 + 选择食物/拍照识别入口
+        LinearLayout dietCard = Ui.card(c);
+        dietCard.addView(Ui.sectionHeader(c, "饮食记录", null, null));
+        dietCard.addView(Ui.text(c, "从食物表点选，或拍一张照片让 AI 估算热量", 12, Ui.SLATE, false),
+                Ui.matchWrap(2, c));
+        dietListBox = Ui.column(c);
+        dietCard.addView(dietListBox, Ui.matchWrap(10, c));
+        dietSummaryView = Ui.text(c, "", 13, Ui.CAL_TEXT, true);
+        dietCard.addView(dietSummaryView, Ui.matchWrap(8, c));
+        LinearLayout dietBtnRow = Ui.row(c);
+        Button pickFoodBtn = Ui.ghostButton(c, "＋ 选择食物");
+        pickFoodBtn.setOnClickListener(v -> showFoodPicker());
+        dietBtnRow.addView(pickFoodBtn, Ui.weight1());
+        Button photoBtn = Ui.primaryButton(c, "📷 拍照识别");
+        photoBtn.setOnClickListener(v -> showPhotoSource());
+        LinearLayout.LayoutParams photoLp = Ui.weight1();
+        photoLp.leftMargin = Ui.dp(c, 10);
+        dietBtnRow.addView(photoBtn, photoLp);
+        dietCard.addView(dietBtnRow, Ui.matchWrap(12, c));
+        content.addView(dietCard, Ui.matchWrap(12, c));
+
         // 4. 小习惯卡: 2 列瓷砖勾选
         LinearLayout habitCard = Ui.card(c);
         habitCard.addView(Ui.sectionHeader(c, "今天做到的小习惯", null, null));
@@ -220,7 +271,15 @@ public class RecordsPage extends BasePage {
     @Override
     public void onShow() {
         super.onShow();
+        activity().setActivityResultListener(resultListener);
         load();
+        loadDiet();
+    }
+
+    @Override
+    public void onHide() {
+        super.onHide();
+        activity().clearActivityResultListener(resultListener);
     }
 
     /* ---------- 控件小工厂 ---------- */
@@ -359,6 +418,456 @@ public class RecordsPage extends BasePage {
         if (alreadySaved) { saveButton.setText("当天手工记录已存在"); saveButton.setEnabled(false); return; }
         saveButton.setText("保存今天的记录");
         saveButton.setEnabled(true);
+    }
+
+    /* ---------- v2.3 饮食记录 ---------- */
+    private String todayStr() {
+        return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+    }
+
+    /** 拉取今日饮食条目并渲染 (进入页面/增删后调用) */
+    private void loadDiet() {
+        api().dietList(todayStr(), new ApiClient.Callback() {
+            @Override public void onOk(JSONObject data, int status) {
+                dietEntries.clear();
+                JSONArray arr = data.optJSONArray("entries");
+                if (arr != null) {
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject e = arr.optJSONObject(i);
+                        if (e != null) dietEntries.add(e);
+                    }
+                }
+                renderDiet(data.optDouble("total_kcal", 0));
+            }
+            @Override public void onError(String message) {
+                renderDiet(-1);
+            }
+        });
+    }
+
+    private void renderDiet(double totalKcal) {
+        if (dietListBox == null) return;
+        dietListBox.removeAllViews();
+        Context c = ctx();
+        if (dietEntries.isEmpty()) {
+            dietListBox.addView(Ui.text(c, "今天还没有饮食记录，点下方按钮添加第一餐。", 12.5f, Ui.MUTED, false));
+            if (dietSummaryView != null) dietSummaryView.setText("今日摄入 0 千卡 · 0 项");
+            return;
+        }
+        double sum = 0;
+        for (JSONObject e : dietEntries) {
+            sum += e.optDouble("calories_kcal", 0);
+            dietListBox.addView(dietEntryRow(e), Ui.matchWrap(6, c));
+        }
+        double total = totalKcal >= 0 ? totalKcal : sum;
+        if (dietSummaryView != null) {
+            dietSummaryView.setText("今日摄入 " + Math.round(total) + " 千卡 · " + dietEntries.size() + " 项");
+        }
+    }
+
+    private View dietEntryRow(final JSONObject e) {
+        Context c = ctx();
+        LinearLayout rowLayout = Ui.row(c);
+        rowLayout.setBackground(roundStroke(Ui.SOFT, 10, Ui.BORDER));
+        int hp = Ui.dp(c, 10), vp = Ui.dp(c, 8);
+        rowLayout.setPadding(hp, vp, hp, vp);
+        String name = e.optString("name", "");
+        if ("photo".equals(e.optString("source"))) name = "📷 " + name;
+        TextView nameView = Ui.text(c, name, 13.5f, Ui.INK, true);
+        rowLayout.addView(nameView, Ui.weight1());
+        String sub = "";
+        if (!e.isNull("grams")) sub = Math.round(e.optDouble("grams", 0)) + " g · ";
+        TextView kcalView = Ui.text(c, sub + Math.round(e.optDouble("calories_kcal", 0)) + " 千卡",
+                12.5f, Ui.CAL_TEXT, true);
+        rowLayout.addView(kcalView);
+        TextView del = Ui.text(c, " ✕ ", 14, Ui.MUTED, true);
+        del.setPadding(Ui.dp(c, 6), Ui.dp(c, 2), 0, Ui.dp(c, 2));
+        final int id = e.optInt("id", -1);
+        del.setOnClickListener(v -> {
+            if (id < 0) return;
+            api().dietDelete(id, new ApiClient.Callback() {
+                @Override public void onOk(JSONObject data, int status) {
+                    toast("已删除");
+                    loadDiet();
+                }
+                @Override public void onError(String message) {
+                    toast(message == null || message.isEmpty() ? "删除失败" : message);
+                }
+            });
+        });
+        rowLayout.addView(del);
+        return rowLayout;
+    }
+
+    /** 通用新增一条饮食记录, 成功后刷新列表 */
+    private void addDietEntry(String name, Integer grams, int kcal, String source) {
+        try {
+            JSONObject body = new JSONObject();
+            body.put("entry_date", todayStr());
+            body.put("name", name);
+            body.put("grams", grams == null ? JSONObject.NULL : grams);
+            body.put("calories_kcal", kcal);
+            body.put("source", source);
+            api().dietAdd(body, new ApiClient.Callback() {
+                @Override public void onOk(JSONObject data, int status) {
+                    toast("已记录：" + name);
+                    loadDiet();
+                }
+                @Override public void onError(String message) {
+                    toast(message == null || message.isEmpty() ? "记录失败" : message);
+                }
+            });
+        } catch (Exception ex) {
+            toast("记录失败");
+        }
+    }
+
+    /* ----- 选择食物: 列表对话框 → 份量对话框 ----- */
+    private void showFoodPicker() {
+        Context c = ctx();
+        LinearLayout list = Ui.column(c);
+        list.setBackgroundColor(Ui.CARD);
+        int p = Ui.dp(c, 8);
+        list.setPadding(p, p, p, p);
+        ScrollView sv = new ScrollView(c);
+        sv.addView(list);
+        final AlertDialog[] holder = new AlertDialog[1];
+        for (final Foods.Food food : Foods.ALL) {
+            LinearLayout rowLayout = Ui.row(c);
+            rowLayout.setBackground(roundStroke(Ui.SOFT, 10, Ui.BORDER));
+            int hp = Ui.dp(c, 12), vp = Ui.dp(c, 10);
+            rowLayout.setPadding(hp, vp, hp, vp);
+            rowLayout.addView(Ui.text(c, food.emoji + "  " + food.name, 14.5f, Ui.INK, true), Ui.weight1());
+            rowLayout.addView(Ui.text(c, food.kcalPer100g + " 千卡/100g", 12, Ui.SLATE, false));
+            rowLayout.setOnClickListener(v -> {
+                if (holder[0] != null) holder[0].dismiss();
+                showPortionDialog(food);
+            });
+            list.addView(rowLayout, Ui.matchWrap(6, c));
+        }
+        holder[0] = new AlertDialog.Builder(c)
+                .setTitle("选择食物")
+                .setView(sv)
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 克数步进小部件: 一行 [−50][−10] 数值 [+10][+50], 变化时回调 */
+    private LinearLayout gramsStepper(final int[] grams, final Runnable onChange) {
+        Context c = ctx();
+        LinearLayout rowLayout = Ui.row(c);
+        rowLayout.setGravity(Gravity.CENTER);
+        final TextView value = Ui.text(c, "", 18, Ui.INK, true);
+        value.setGravity(Gravity.CENTER);
+        int[] steps = {-50, -10, 10, 50};
+        for (final int step : steps) {
+            TextView b = Ui.text(c, (step > 0 ? "+" : "−") + Math.abs(step), 13, Ui.PRIMARY_DARK, true);
+            b.setGravity(Gravity.CENTER);
+            b.setBackground(roundStroke(Ui.GREEN_SOFT, 999, Ui.BORDER));
+            int hp = Ui.dp(c, 10), vp = Ui.dp(c, 6);
+            b.setPadding(hp, vp, hp, vp);
+            b.setOnClickListener(v -> {
+                grams[0] = Math.max(10, Math.min(3000, grams[0] + step));
+                value.setText(grams[0] + " g");
+                if (onChange != null) onChange.run();
+            });
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            blp.leftMargin = Ui.dp(c, 4);
+            blp.rightMargin = Ui.dp(c, 4);
+            if (step == 10) {
+                // 数值显示在 -10 与 +10 之间
+                LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(Ui.dp(c, 76),
+                        LinearLayout.LayoutParams.WRAP_CONTENT);
+                rowLayout.addView(value, vlp);
+            }
+            rowLayout.addView(b, blp);
+        }
+        value.setText(grams[0] + " g");
+        return rowLayout;
+    }
+
+    private void showPortionDialog(final Foods.Food food) {
+        Context c = ctx();
+        final int[] grams = {food.defaultGrams};
+        LinearLayout box = Ui.column(c);
+        box.setBackgroundColor(Ui.CARD);
+        int p = Ui.dp(c, 16);
+        box.setPadding(p, p, p, p);
+        box.addView(Ui.text(c, food.emoji + " " + food.name + " · " + food.kcalPer100g + " 千卡/100g",
+                13, Ui.SLATE, false));
+        final TextView kcalPreview = Ui.text(c, "", 20, Ui.CAL_TEXT, true);
+        kcalPreview.setGravity(Gravity.CENTER);
+        Runnable refresh = () -> kcalPreview.setText("≈ " + Foods.kcalFor(food, grams[0]) + " 千卡");
+        box.addView(gramsStepper(grams, refresh), Ui.matchWrap(12, c));
+        box.addView(kcalPreview, Ui.matchWrap(10, c));
+        refresh.run();
+        new AlertDialog.Builder(c)
+                .setTitle("这一份有多重？")
+                .setView(box)
+                .setPositiveButton("记入今日", (d, w) ->
+                        addDietEntry(food.name, grams[0], Foods.kcalFor(food, grams[0]), "manual"))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /* ----- 拍照识别: 选图/拍照 → 压缩 Base64 → AI 识别 → 确认入账 ----- */
+    private void showPhotoSource() {
+        new AlertDialog.Builder(ctx())
+                .setTitle("拍照识别热量")
+                .setItems(new String[]{"📷 拍照", "🖼️ 从相册选"}, (d, which) -> {
+                    if (which == 0) {
+                        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                        activity().startActivityForResult(intent, REQ_CAMERA);
+                    } else {
+                        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                        intent.setType("image/*");
+                        activity().startActivityForResult(
+                                Intent.createChooser(intent, "选择一张食物照片"), REQ_GALLERY);
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void handleActivityResult(int requestCode, int resultCode, Intent data) {
+        if (resultCode != Activity.RESULT_OK || data == null) return;
+        if (requestCode == REQ_GALLERY && data.getData() != null) {
+            Bitmap bmp = decodeUriScaled(data.getData(), 1024);
+            if (bmp == null) { toast("图片读取失败，换一张试试"); return; }
+            recognizeFoodPhoto(bmp);
+        } else if (requestCode == REQ_CAMERA) {
+            Object extra = data.getExtras() != null ? data.getExtras().get("data") : null;
+            if (extra instanceof Bitmap) {
+                Bitmap bmp = (Bitmap) extra;
+                // 缩略图偏小时放大到最长边 512, 提高识别可用性
+                int maxSide = Math.max(bmp.getWidth(), bmp.getHeight());
+                if (maxSide > 0 && maxSide < 512) {
+                    double scale = 512.0 / maxSide;
+                    bmp = Bitmap.createScaledBitmap(bmp,
+                            (int) (bmp.getWidth() * scale), (int) (bmp.getHeight() * scale), true);
+                }
+                recognizeFoodPhoto(bmp);
+            } else {
+                toast("没有取得照片，再试一次");
+            }
+        }
+    }
+
+    /** 相册图解码: 两段采样避免大图爆内存, 再缩放到最长边 ≤ maxSide */
+    private Bitmap decodeUriScaled(Uri uri, int maxSide) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            InputStream is = ctx().getContentResolver().openInputStream(uri);
+            BitmapFactory.decodeStream(is, null, bounds);
+            if (is != null) is.close();
+            int sample = 1;
+            int longest = Math.max(bounds.outWidth, bounds.outHeight);
+            while (longest / sample > maxSide * 2) sample *= 2;
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            is = ctx().getContentResolver().openInputStream(uri);
+            Bitmap bmp = BitmapFactory.decodeStream(is, null, opts);
+            if (is != null) is.close();
+            return bmp == null ? null : scaleToMax(bmp, maxSide);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Bitmap scaleToMax(Bitmap bmp, int maxSide) {
+        int longest = Math.max(bmp.getWidth(), bmp.getHeight());
+        if (longest <= maxSide || longest == 0) return bmp;
+        double scale = (double) maxSide / longest;
+        return Bitmap.createScaledBitmap(bmp,
+                (int) (bmp.getWidth() * scale), (int) (bmp.getHeight() * scale), true);
+    }
+
+    private void recognizeFoodPhoto(Bitmap bmp) {
+        Bitmap scaled = scaleToMax(bmp, 1024);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        scaled.compress(Bitmap.CompressFormat.JPEG, 75, baos);
+        String b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+
+        Context c = ctx();
+        LinearLayout box = Ui.column(c);
+        box.setBackgroundColor(Ui.CARD);
+        int p = Ui.dp(c, 20);
+        box.setPadding(p, p, p, p);
+        TextView t = Ui.text(c, "🤖 AI 正在识别食物与热量…", 14.5f, Ui.INK, false);
+        t.setGravity(Gravity.CENTER);
+        box.addView(t);
+        photoProgressDialog = new AlertDialog.Builder(c)
+                .setView(box)
+                .setCancelable(false)
+                .show();
+
+        api().agentFoodPhoto(b64, new ApiClient.Callback() {
+            @Override public void onOk(JSONObject data, int status) {
+                dismissPhotoProgress();
+                showPhotoConfirm(data);
+            }
+            @Override public void onError(String message) {
+                dismissPhotoProgress();
+                // 模型未开通/网络异常等一律友好兜底, 不展示原始错误
+                toast("拍照识别暂不可用，可先用『选择食物』记录");
+            }
+        });
+    }
+
+    private void dismissPhotoProgress() {
+        if (photoProgressDialog != null) {
+            photoProgressDialog.dismiss();
+            photoProgressDialog = null;
+        }
+    }
+
+    /** 拍照识别结果的一项 (可在确认框内改名/改克数/删除) */
+    private static class PhotoItem {
+        String name;
+        int grams;
+        int baseGrams;
+        int baseKcal;
+        int kcal;
+        boolean removed = false;
+        EditText nameInput;
+    }
+
+    private void showPhotoConfirm(JSONObject data) {
+        Context c = ctx();
+        JSONArray arr = data.optJSONArray("items");
+        final List<PhotoItem> items = new ArrayList<>();
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                PhotoItem it = new PhotoItem();
+                it.name = o.optString("name", "");
+                it.grams = o.isNull("grams") ? 0 : (int) Math.round(o.optDouble("grams", 0));
+                it.baseGrams = it.grams;
+                it.kcal = (int) Math.round(o.optDouble("calories_kcal", 0));
+                it.baseKcal = it.kcal;
+                if (!it.name.isEmpty()) items.add(it);
+            }
+        }
+        if (items.isEmpty()) {
+            toast("没有识别出食物，换个角度或更近一点再拍");
+            return;
+        }
+
+        LinearLayout box = Ui.column(c);
+        box.setBackgroundColor(Ui.CARD);
+        int p = Ui.dp(c, 14);
+        box.setPadding(p, p, p, p);
+        String note = data.optString("note", "");
+        if (!note.isEmpty()) {
+            box.addView(Ui.text(c, "🤖 " + note, 12, Ui.SLATE, false));
+        }
+        final TextView totalView = Ui.text(c, "", 15, Ui.CAL_TEXT, true);
+        final Runnable refreshTotal = () -> {
+            int sum = 0;
+            for (PhotoItem it : items) if (!it.removed) sum += it.kcal;
+            totalView.setText("合计 ≈ " + sum + " 千卡（可点步进微调克数）");
+        };
+
+        LinearLayout rowsBox = Ui.column(c);
+        for (final PhotoItem it : items) {
+            final LinearLayout rowLayout = Ui.column(c);
+            rowLayout.setBackground(roundStroke(Ui.SOFT, 10, Ui.BORDER));
+            int hp = Ui.dp(c, 10), vp = Ui.dp(c, 8);
+            rowLayout.setPadding(hp, vp, hp, vp);
+            LinearLayout nameRow = Ui.row(c);
+            EditText nameInput = Ui.input(c, "食物名", InputType.TYPE_CLASS_TEXT);
+            nameInput.setText(it.name);
+            nameInput.setTextSize(14);
+            it.nameInput = nameInput;
+            nameRow.addView(nameInput, Ui.weight1());
+            TextView del = Ui.text(c, " ✕ ", 15, Ui.MUTED, true);
+            del.setOnClickListener(v -> {
+                it.removed = true;
+                rowLayout.setVisibility(View.GONE);
+                refreshTotal.run();
+            });
+            nameRow.addView(del);
+            rowLayout.addView(nameRow);
+            final int[] gramsHolder = {Math.max(10, it.grams > 0 ? it.grams : 100)};
+            it.grams = gramsHolder[0];
+            final TextView kcalView = Ui.text(c, "", 13, Ui.CAL_TEXT, true);
+            kcalView.setGravity(Gravity.CENTER);
+            Runnable refreshKcal = () -> {
+                it.kcal = Foods.scaleKcal(it.baseKcal, it.baseGrams, gramsHolder[0]);
+                kcalView.setText("≈ " + it.kcal + " 千卡");
+                refreshTotal.run();
+            };
+            rowLayout.addView(gramsStepper(gramsHolder, refreshKcal), Ui.matchWrap(6, c));
+            rowLayout.addView(kcalView, Ui.matchWrap(4, c));
+            refreshKcal.run();
+            rowsBox.addView(rowLayout, Ui.matchWrap(8, c));
+        }
+        ScrollView sv = new ScrollView(c);
+        sv.addView(rowsBox);
+        LinearLayout.LayoutParams svLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(c, 320));
+        box.addView(sv, svLp);
+        box.addView(totalView, Ui.matchWrap(10, c));
+        refreshTotal.run();
+
+        new AlertDialog.Builder(c)
+                .setTitle("确认识别结果")
+                .setView(box)
+                .setPositiveButton("全部记入今日", (d, w) -> savePhotoItems(items))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 把确认后的识别结果逐条入账 (source=photo), 全部完成后刷新列表 */
+    private void savePhotoItems(List<PhotoItem> items) {
+        final List<PhotoItem> pending = new ArrayList<>();
+        for (PhotoItem it : items) {
+            if (it.removed) continue;
+            String name = it.nameInput != null
+                    ? it.nameInput.getText().toString().trim() : it.name;
+            if (name.isEmpty()) continue;
+            PhotoItem copy = new PhotoItem();
+            copy.name = name;
+            copy.grams = it.grams;
+            copy.kcal = it.kcal;
+            pending.add(copy);
+        }
+        if (pending.isEmpty()) { toast("没有要记录的食物"); return; }
+        final int[] left = {pending.size()};
+        final int[] okCount = {0};
+        for (final PhotoItem it : pending) {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("entry_date", todayStr());
+                body.put("name", it.name);
+                body.put("grams", it.grams > 0 ? it.grams : JSONObject.NULL);
+                body.put("calories_kcal", it.kcal);
+                body.put("source", "photo");
+                api().dietAdd(body, new ApiClient.Callback() {
+                    @Override public void onOk(JSONObject data, int status) {
+                        okCount[0]++;
+                        if (--left[0] == 0) finishPhotoSave(okCount[0], pending.size());
+                    }
+                    @Override public void onError(String message) {
+                        if (--left[0] == 0) finishPhotoSave(okCount[0], pending.size());
+                    }
+                });
+            } catch (Exception e) {
+                if (--left[0] == 0) finishPhotoSave(okCount[0], pending.size());
+            }
+        }
+    }
+
+    private void finishPhotoSave(int ok, int total) {
+        if (ok > 0) {
+            toast("已记入 " + ok + " 项饮食");
+            loadDiet();
+        } else {
+            toast("记录失败，请稍后再试");
+        }
     }
 
     private List<JSONObject> applyFilter() {

@@ -31,6 +31,13 @@ CREATE TABLE IF NOT EXISTS exercises (
  note TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_exercises_user_date ON exercises(user_id, exercise_date);
+CREATE TABLE IF NOT EXISTS diet_entries (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id),
+ entry_date TEXT NOT NULL, name TEXT NOT NULL, grams REAL,
+ calories_kcal REAL NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'manual',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_diet_user_date ON diet_entries(user_id, entry_date);
 CREATE TABLE IF NOT EXISTS mihealth_connections (
  user_id TEXT PRIMARY KEY REFERENCES users(id),
  encrypted_session TEXT NOT NULL,

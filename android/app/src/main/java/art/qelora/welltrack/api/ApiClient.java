@@ -157,6 +157,41 @@ public class ApiClient {
         });
     }
 
+    /* ---------- 饮食记录 (主后端 /api/v1/diet, 与 Worker 契约一致) ---------- */
+
+    /** 拉取某日饮食记录: 返回 {date, entries:[...], total_kcal, count} */
+    public void dietList(String date, Callback cb) {
+        request("/api/v1/diet?date=" + date, "GET", null, cb);
+    }
+
+    /** 新增一条饮食记录: body {entry_date, name, grams, calories_kcal, source} */
+    public void dietAdd(JSONObject body, Callback cb) {
+        request("/api/v1/diet", "POST", body, cb);
+    }
+
+    /** 删除一条饮食记录 (后端 DELETE /api/v1/diet/{id}) */
+    public void dietDelete(int id, Callback cb) {
+        request("/api/v1/diet/" + id, "DELETE", null, cb);
+    }
+
+    /**
+     * 拍照识别热量 (POST AGENT_BASE/api/v1/agent/food-photo):
+     * body {image_base64}, 返回 {items:[{name,grams,calories_kcal}], total_kcal, note, model}。
+     * 走 agent 独立会话通道 (60 秒超时); 视觉模型未开通时后端返回错误, 由页面友好兜底。
+     */
+    public void agentFoodPhoto(String base64, Callback cb) {
+        executor.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("image_base64", base64 == null ? "" : base64);
+                JSONObject data = agentCallSync("/api/v1/agent/food-photo", "POST", body, true);
+                main.post(() -> cb.onOk(data, 200));
+            } catch (Exception e) {
+                main.post(() -> cb.onError(friendly(e)));
+            }
+        });
+    }
+
     /** 智能体域通用调用: 独立会话 + 401 重建重试一次 + 60 秒读超时 (大模型生成较慢) */
     private JSONObject agentCallSync(String path, String method, JSONObject body, boolean retry) throws Exception {
         ensureAgentSession();
