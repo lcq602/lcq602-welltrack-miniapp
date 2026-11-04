@@ -71,6 +71,10 @@ public class RecordsPage extends BasePage {
     private boolean saving = false;
     private boolean alreadySaved = false;
 
+    /* v2.5 饮水快捷记录: 今日合计 + 进度条 + 一键加水 (接口 /api/v1/water) */
+    private TextView waterQuickText;
+    private LinearLayout waterBarBox;
+
     /* v2.3 饮食记录: 今日条目列表 + 合计 (接口 /api/v1/diet) */
     private static final int REQ_GALLERY = 4101;
     private static final int REQ_CAMERA = 4102;
@@ -180,6 +184,23 @@ public class RecordsPage extends BasePage {
         statusCard.addView(Ui.sectionHeader(c, "日常状态", null, null));
         statusCard.addView(Ui.text(c, "关注补水、作息与饱腹体感", 12, Ui.SLATE, false), Ui.matchWrap(2, c));
         waterInput = statusRow(statusCard, Ui.MOVE, "饮水", "如 2000", "ml", true, true);
+        // v2.5: 饮水快捷行 (今日合计走 records 列表, 与首页水卡同一口径)
+        LinearLayout waterQuick = Ui.column(c);
+        waterQuickText = Ui.text(c, "今日饮水：—", 12.5f, Ui.MOVE, true);
+        waterQuick.addView(waterQuickText);
+        waterBarBox = Ui.column(c);
+        waterQuick.addView(waterBarBox, Ui.matchWrap(6, c));
+        LinearLayout waterBtnRow = Ui.row(c);
+        Button water250 = Ui.ghostButton(c, "＋ 250 ml");
+        water250.setOnClickListener(v -> addWaterQuick(250));
+        waterBtnRow.addView(water250, Ui.weight1());
+        Button waterCustom = Ui.ghostButton(c, "自定义…");
+        waterCustom.setOnClickListener(v -> showWaterCustomDialog());
+        LinearLayout.LayoutParams wclp = Ui.weight1();
+        wclp.leftMargin = Ui.dp(c, 8);
+        waterBtnRow.addView(waterCustom, wclp);
+        waterQuick.addView(waterBtnRow, Ui.matchWrap(8, c));
+        statusCard.addView(waterQuick, Ui.matchWrap(10, c));
         sleepInput = statusRow(statusCard, Ui.SLEEP, "睡眠", "如 7.5", "小时", true, false);
         dietInput = statusRow(statusCard, Ui.CAL, "饮食简记", "例如：三餐规律，晚餐蔬菜过半，无夜宵", null, false, false);
         content.addView(statusCard, Ui.matchWrap(12, c));
@@ -381,6 +402,7 @@ public class RecordsPage extends BasePage {
                 updateDateFlags();
                 refreshFilterChips();
                 renderHistory();
+                updateWaterQuick();
             }
             @Override public void onError(String message) {
                 loading = false;
@@ -409,6 +431,62 @@ public class RecordsPage extends BasePage {
         }
         if (alreadyView != null) alreadyView.setVisibility(alreadySaved ? View.VISIBLE : View.GONE);
         updateSaveButton();
+    }
+
+    /* ---------- v2.5 饮水快捷记录 ---------- */
+    private int todayWaterFromRecords() {
+        String today = todayStr();
+        for (JSONObject r : records) {
+            if (r != null && today.equals(r.optString("record_date")) && !r.isNull("water_ml")) {
+                return (int) Math.round(r.optDouble("water_ml", 0));
+            }
+        }
+        return 0;
+    }
+
+    private void updateWaterQuick() {
+        if (waterQuickText == null) return;
+        int ml = todayWaterFromRecords();
+        int pct = Math.min(100, (int) Math.round(ml / 2000.0 * 100));
+        waterQuickText.setText("今日饮水：" + ml + " / 2000 ml · " + pct + "%"
+                + (pct >= 100 ? " 🎉 已达标" : ""));
+        if (waterBarBox != null) {
+            waterBarBox.removeAllViews();
+            waterBarBox.addView(Ui.progressBar(ctx(), ml / 2000.0, Ui.MOVE, 8));
+        }
+    }
+
+    private void addWaterQuick(final int amountMl) {
+        if (amountMl < 10 || amountMl > 2000) { toast("单次饮水量需在 10~2000 ml 之间"); return; }
+        api().waterAdd(todayStr(), amountMl, new ApiClient.Callback() {
+            @Override public void onOk(JSONObject data, int status) {
+                toast("已记 +" + amountMl + " ml 💧");
+                load();
+            }
+            @Override public void onError(String message) {
+                toast("饮水记录失败，请稍后再试");
+            }
+        });
+    }
+
+    private void showWaterCustomDialog() {
+        Context c = ctx();
+        final EditText input = new EditText(c);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setHint("输入毫升数，如 500");
+        int p = Ui.dp(c, 16);
+        input.setPadding(p, p, p, p);
+        new AlertDialog.Builder(c)
+                .setTitle("自定义饮水量")
+                .setView(input)
+                .setPositiveButton("记入今日", (d, w) -> {
+                    String s = input.getText().toString().trim();
+                    int amount;
+                    try { amount = Integer.parseInt(s); } catch (Exception e) { toast("请输入数字"); return; }
+                    addWaterQuick(amount);
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void updateSaveButton() {

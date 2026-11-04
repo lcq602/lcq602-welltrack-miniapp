@@ -42,6 +42,27 @@ def test_local_setup_records_and_analytics(tmp_path, monkeypatch):
     assert backup["version"] == 1 and len(backup["records"]) == 1
 
 
+def test_water_quick_add_accumulates_without_blocking_daily_record(tmp_path, monkeypatch):
+    """快捷饮水可多次累加, 且不影响同日手工记录的保存 (不写 daily_records)。"""
+    client = client_at(tmp_path, monkeypatch)
+    login(client)
+    today = str(date.today())
+    first = client.post("/api/v1/water", json={"record_date": today, "amount_ml": 250})
+    assert first.status_code == 201
+    assert first.json()["water_ml"] == 250
+    second = client.post("/api/v1/water", json={"record_date": today, "amount_ml": 250})
+    assert second.json()["water_ml"] == 500
+    assert second.json()["goal_ml"] == 2000
+    assert second.json()["progress_pct"] == 25
+    records = client.get("/api/v1/records").json()
+    assert len(records) == 1 and records[0]["id"] is None and records[0]["water_ml"] == 500
+    assert client.post("/api/v1/records", json={"record_date": today, "weight": 70}).status_code == 201
+    merged = client.get("/api/v1/records").json()
+    assert merged[0]["water_ml"] == 500  # 手工记录无饮水时, 快捷累加仍可见
+    assert client.post("/api/v1/water", json={"record_date": today, "amount_ml": 5}).status_code == 422
+    assert client.post("/api/v1/water", json={"record_date": today, "amount_ml": 2500}).status_code == 422
+
+
 def test_profile_accepts_optional_target_date_as_null(tmp_path, monkeypatch):
     """验证首次设置提交可选目标日期为空时仍可保存。"""
     client = client_at(tmp_path, monkeypatch)

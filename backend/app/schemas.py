@@ -57,6 +57,13 @@ class DietIn(BaseModel):
     calories_kcal: float = Field(ge=0, le=10000)
     source: str = Field(default="manual", pattern="^(manual|photo)$")
 
+class WaterIn(BaseModel):
+    """快捷饮水: 单次累加, 不触碰 daily_records 的同日唯一约束。"""
+    model_config = ConfigDict(extra="forbid")
+    record_date: date
+    amount_ml: int = Field(ge=10, le=2000)
+
+
 class WechatLoginIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str = Field(min_length=1, max_length=256)

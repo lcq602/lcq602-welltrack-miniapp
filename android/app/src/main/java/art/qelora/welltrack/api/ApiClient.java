@@ -169,6 +169,20 @@ public class ApiClient {
         request("/api/v1/diet", "POST", body, cb);
     }
 
+    /* ---------- 快捷饮水 (主后端 /api/v1/water, 与 Worker 契约一致) ---------- */
+
+    /** 快捷加水: body {record_date, amount_ml}, 返回 {water_ml, goal_ml, progress_pct} */
+    public void waterAdd(String date, int amountMl, Callback cb) {
+        try {
+            JSONObject body = new JSONObject();
+            body.put("record_date", date);
+            body.put("amount_ml", amountMl);
+            request("/api/v1/water", "POST", body, cb);
+        } catch (Exception e) {
+            cb.onError("记录失败");
+        }
+    }
+
     /** 删除一条饮食记录 (后端 DELETE /api/v1/diet/{id}) */
     public void dietDelete(int id, Callback cb) {
         request("/api/v1/diet/" + id, "DELETE", null, cb);

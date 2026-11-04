@@ -17,7 +17,7 @@ from .config import CORS_ORIGINS, LOCAL_AUTH_ENABLED, MIHEALTH_ENABLED, MIHEALTH
 from .db import initialize, read_connection, transaction
 from .integrations.mihealth import MiHealthChallenge, MiHealthError, MiHealthVerificationError, connect_mihealth, decrypt_session, encrypt_session, read_mihealth_metrics, read_mihealth_weight_page, read_mihealth_weight_window, refresh_mihealth_session, validate_session_key, verify_mihealth_challenge
 from .integrations.vendor.client import AuthError
-from .schemas import DietIn, ExerciseIn, MiHealthConnectIn, MiHealthSyncIn, MiHealthVerifyIn, ProfileIn, RecordIn, WechatLoginIn
+from .schemas import DietIn, ExerciseIn, MiHealthConnectIn, MiHealthSyncIn, MiHealthVerifyIn, ProfileIn, RecordIn, WaterIn, WechatLoginIn
 
 MIHEALTH_WEIGHT_SYNC_INTERVAL_SECONDS = 60
 MIHEALTH_BACKFILL_PAGES_PER_RUN = 20
@@ -67,6 +67,28 @@ def get_profile(uid):
     """读取当前用户最新的追加式资料版本。"""
     with read_connection() as conn:
         return as_profile(conn.execute("SELECT height_cm,current_weight,target_weight,start_date,goal,target_date,weekly_plan,reminder_settings FROM profile_versions WHERE user_id=? ORDER BY id DESC LIMIT 1", (uid,)).fetchone())
+
+
+WATER_GOAL_ML = 2000
+
+
+def water_totals(conn, uid, start_str, end_str):
+    """按日期汇总快捷饮水 (water_logs), 返回 {record_date: total_ml}。"""
+    rows = conn.execute(
+        "SELECT record_date, COALESCE(SUM(amount_ml),0) AS total FROM water_logs "
+        "WHERE user_id=? AND record_date BETWEEN ? AND ? GROUP BY record_date",
+        (uid, start_str, end_str)).fetchall()
+    return {r["record_date"]: int(r["total"]) for r in rows}
+
+
+def merge_water(records, totals):
+    """把快捷饮水累加进记录的 water_ml (手工记录值 + 快捷累加)。"""
+    for rec in records:
+        extra = totals.get(rec["record_date"], 0)
+        if extra:
+            base = rec.get("water_ml")
+            rec["water_ml"] = (int(base) if base is not None else 0) + extra
+    return records
 
 
 def record_out(row):
@@ -585,6 +607,8 @@ def dashboard(uid: str = Depends(user_id)):
         ).fetchone()
     manual_records = [record_out(r) for r in rows]
     records = _merge_mihealth_weights(manual_records, imported_weights)
+    with read_connection() as conn:
+        merge_water(records, water_totals(conn, uid, str(start), str(today)))
     latest_manual_weight = next((r["weight"] for r in reversed(manual_records) if r["weight"] is not None), None)
     latest_weight = latest_imported_weight["value"] if latest_imported_weight else (latest_manual_weight or (p["current_weight"] if p else None))
     weight_source = "mihealth" if latest_imported_weight else "manual" if latest_manual_weight is not None else "profile"
@@ -602,12 +626,18 @@ def dashboard(uid: str = Depends(user_id)):
     mi = mihealth_status(uid)
     with read_connection() as conn:
         diet_row = conn.execute("SELECT COUNT(*) AS c, COALESCE(SUM(calories_kcal),0) AS s FROM diet_entries WHERE user_id=? AND entry_date=?", (uid, str(today))).fetchone()
+        water_row = conn.execute("SELECT water_ml FROM daily_records WHERE user_id=? AND record_date=?", (uid, str(today))).fetchone()
+        water_logged = conn.execute("SELECT COALESCE(SUM(amount_ml),0) AS total FROM water_logs WHERE user_id=? AND record_date=?", (uid, str(today))).fetchone()["total"]
     diet_today = {"total_kcal": round(float(diet_row["s"]), 1), "count": diet_row["c"]}
+    water_today_ml = (int(water_row["water_ml"]) if water_row and water_row["water_ml"] is not None else 0) + int(water_logged)
+    water_today = {"water_ml": water_today_ml, "goal_ml": WATER_GOAL_ML,
+                   "progress_pct": min(100, round(water_today_ml / WATER_GOAL_ML * 100))}
     return {
         "profile": p, "today": str(today), "current_weight": latest_weight, "current_weight_source": weight_source, "target_weight": p["target_weight"] if p else None,
         "progress": progress, "bmi": bmi, "bmi_label": "仅供参考，不用于诊断", "records": records,
         "exercise_count_7d": exercise_count, "record_days_7d": len(manual_records), "weekly_completion": min(100, round(len(manual_records) / 7 * 100)),
         "todos": todos[goal], "configured": bool(p and p["configured"]), "diet_today": diet_today,
+        "water_today": water_today,
         "mihealth": {
             "connected": mi["connected"],
             "last_synced_at": mi["last_synced_at"],
@@ -716,8 +746,36 @@ def list_records(start: date | None = None, end: date | None = None, limit: int 
                 "is_mihealth_only": True,
             }
 
+    with read_connection() as conn:
+        totals = water_totals(conn, uid, start_str, end_str)
+    merge_water(list(by_day.values()), totals)
+    for day, total in totals.items():
+        if day not in by_day and total > 0:
+            by_day[day] = {"id": None, "record_date": day, "weight": None, "weight_source": None,
+                           "waist_cm": None, "diet": "", "water_ml": total, "sleep_hours": None,
+                           "sleep_source": None, "habits": [], "note": "", "steps": None,
+                           "calories": None, "workout_minutes": None, "is_mihealth_only": False}
+
     all_records = sorted(by_day.values(), key=lambda x: x["record_date"], reverse=True)
     return all_records[offset:offset + limit]
+
+@app.post("/api/v1/water", status_code=201)
+def add_water(payload: WaterIn, uid: str = Depends(user_id)):
+    """快捷饮水: 追加一条 water_logs, 返回当日饮水合计与目标进度。
+
+    不写 daily_records, 因此不影响同日手工记录的唯一约束, 当天先加水后补体重也不冲突。
+    """
+    day = str(payload.record_date)
+    with transaction() as conn:
+        conn.execute("INSERT INTO water_logs(user_id,record_date,amount_ml) VALUES(?,?,?)",
+                     (uid, day, payload.amount_ml))
+        base = conn.execute("SELECT water_ml FROM daily_records WHERE user_id=? AND record_date=?",
+                            (uid, day)).fetchone()
+        logged = conn.execute("SELECT COALESCE(SUM(amount_ml),0) AS total FROM water_logs "
+                              "WHERE user_id=? AND record_date=?", (uid, day)).fetchone()["total"]
+    total = (int(base["water_ml"]) if base and base["water_ml"] is not None else 0) + int(logged)
+    return {"record_date": day, "added_ml": payload.amount_ml, "water_ml": total,
+            "goal_ml": WATER_GOAL_ML, "progress_pct": min(100, round(total / WATER_GOAL_ML * 100))}
 
 @app.post("/api/v1/records", status_code=201)
 def create_record(payload: RecordIn, uid: str = Depends(user_id)):
@@ -855,6 +913,8 @@ def export_csv(uid: str = Depends(user_id)):
     """导出当前用户 CSV 并防止表格公式注入。"""
     with read_connection() as conn:
         rows = conn.execute("SELECT record_date,weight,waist_cm,diet,water_ml,sleep_hours,habits,note FROM daily_records WHERE user_id=? ORDER BY record_date", (uid,)).fetchall()
+        water = {r["record_date"]: int(r["total"]) for r in conn.execute(
+            "SELECT record_date, COALESCE(SUM(amount_ml),0) AS total FROM water_logs WHERE user_id=? GROUP BY record_date", (uid,)).fetchall()}
         exercises = conn.execute("SELECT exercise_date,kind,duration_minutes,note FROM exercises WHERE user_id=? ORDER BY exercise_date", (uid,)).fetchall()
         mihealth = conn.execute(
             "SELECT metric,recorded_at,value,unit,payload FROM mihealth_imports WHERE user_id=? ORDER BY recorded_at",
@@ -868,7 +928,8 @@ def export_csv(uid: str = Depends(user_id)):
         text = "" if value is None else str(value)
         return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
     for r in rows:
-        writer.writerow(["日常", safe(r["record_date"]), safe(r["weight"]), safe(r["waist_cm"]), safe(r["diet"]), safe(r["water_ml"]), safe(r["sleep_hours"]), safe(r["habits"]), "", "", "", "", safe(r["note"])])
+        water_ml = (r["water_ml"] or 0) + water.get(r["record_date"], 0) if r["water_ml"] is not None or r["record_date"] in water else None
+        writer.writerow(["日常", safe(r["record_date"]), safe(r["weight"]), safe(r["waist_cm"]), safe(r["diet"]), safe(water_ml), safe(r["sleep_hours"]), safe(r["habits"]), "", "", "", "", safe(r["note"])])
     for r in exercises:
         writer.writerow(["运动", safe(r["exercise_date"]), "", "", "", "", "", "", safe(r["kind"]), safe(r["duration_minutes"]), "", "", safe(r["note"])])
     for row in mihealth:

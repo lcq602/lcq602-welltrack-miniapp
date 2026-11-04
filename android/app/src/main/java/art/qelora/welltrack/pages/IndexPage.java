@@ -1,5 +1,6 @@
 package art.qelora.welltrack.pages;
 
+import android.app.AlertDialog;
 import android.app.DatePickerDialog;
 import android.content.Context;
 import android.graphics.Color;
@@ -530,6 +531,8 @@ public class IndexPage extends BasePage {
         body.addView(renderTrainingCard(), Ui.matchWrap(14, ctx()));
         // 3) 三瓷砖: 饮食记录 / 有氧运动 / 身体数据
         body.addView(renderTopTiles(), Ui.matchWrap(12, ctx()));
+        // 3.5) 今日饮水卡: 进度环 + 一键 +250ml / 自定义 (POST /api/v1/water)
+        body.addView(renderWaterCard(), Ui.matchWrap(12, ctx()));
         // 4) 本周计划: 周条 + 今日摘要
         body.addView(renderWeekStrip(), Ui.matchWrap(18, ctx()));
 
@@ -688,6 +691,84 @@ public class IndexPage extends BasePage {
         if (!first) lp.leftMargin = Ui.dp(ctx(), 4);
         if (!last) lp.rightMargin = Ui.dp(ctx(), 4);
         return lp;
+    }
+
+    /* v2.5 今日饮水卡: 进度环 (目标 2000 ml) + 一键 +250ml / 自定义毫升。
+       水量优先取 dashboard.water_today, 旧后端回退今日记录的 water_ml。 */
+    private int todayWaterMl() {
+        JSONObject wt = data != null ? data.optJSONObject("water_today") : null;
+        if (wt != null && !wt.isNull("water_ml")) return wt.optInt("water_ml", 0);
+        JSONObject todayRec = recordByDateMap.get(todayString());
+        if (todayRec != null && !todayRec.isNull("water_ml")) {
+            return (int) Math.round(todayRec.optDouble("water_ml", 0));
+        }
+        return 0;
+    }
+
+    private LinearLayout renderWaterCard() {
+        Context c = ctx();
+        int ml = todayWaterMl();
+        int pct = Math.min(100, (int) Math.round(ml / 2000.0 * 100));
+        LinearLayout card = Ui.card(c);
+        LinearLayout main = Ui.row(c);
+        main.setGravity(Gravity.CENTER_VERTICAL);
+        art.qelora.welltrack.ui.WaterRing ring = new art.qelora.welltrack.ui.WaterRing(c);
+        ring.setRatio(ml / 2000.0);
+        int rsz = Ui.dp(c, 64);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(rsz, rsz);
+        rlp.rightMargin = Ui.dp(c, 12);
+        main.addView(ring, rlp);
+        LinearLayout texts = Ui.column(c);
+        texts.addView(Ui.text(c, "💧 今日饮水", 15, Ui.INK, true));
+        texts.addView(Ui.text(c, ml + " / 2000 ml · " + pct + "%"
+                + (pct >= 100 ? " 🎉 已达标" : "，还差 " + Math.max(0, 2000 - ml) + " ml"),
+                13, Ui.SLATE, false), Ui.matchWrap(2, c));
+        main.addView(texts, Ui.weight1());
+        card.addView(main);
+        LinearLayout btnRow = Ui.row(c);
+        Button quick = Ui.primaryButton(c, "＋ 250 ml");
+        quick.setOnClickListener(v -> addWater(250));
+        btnRow.addView(quick, Ui.weight1());
+        Button custom = Ui.ghostButton(c, "自定义…");
+        custom.setOnClickListener(v -> showWaterCustomDialog());
+        LinearLayout.LayoutParams clp = Ui.weight1();
+        clp.leftMargin = Ui.dp(c, 8);
+        btnRow.addView(custom, clp);
+        card.addView(btnRow, Ui.matchWrap(12, c));
+        return card;
+    }
+
+    private void addWater(final int amountMl) {
+        if (amountMl < 10 || amountMl > 2000) { toast("单次饮水量需在 10~2000 ml 之间"); return; }
+        api().waterAdd(todayString(), amountMl, new ApiClient.Callback() {
+            @Override public void onOk(JSONObject res, int status) {
+                toast("已记 +" + amountMl + " ml 💧");
+                load();
+            }
+            @Override public void onError(String message) {
+                toast("饮水记录失败，请稍后再试");
+            }
+        });
+    }
+
+    private void showWaterCustomDialog() {
+        Context c = ctx();
+        final EditText input = new EditText(c);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setHint("输入毫升数，如 500");
+        int p = Ui.dp(c, 16);
+        input.setPadding(p, p, p, p);
+        new AlertDialog.Builder(c)
+                .setTitle("自定义饮水量")
+                .setView(input)
+                .setPositiveButton("记入今日", (d, w) -> {
+                    String s = input.getText().toString().trim();
+                    int amount;
+                    try { amount = Integer.parseInt(s); } catch (Exception e) { toast("请输入数字"); return; }
+                    addWater(amount);
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     /* 本周计划: 章节头 + 周条 (今天荧光绿方块, 活动日小圆点) + 今日摘要行 */

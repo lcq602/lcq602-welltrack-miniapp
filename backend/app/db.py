@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS diet_entries (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_diet_user_date ON diet_entries(user_id, entry_date);
+CREATE TABLE IF NOT EXISTS water_logs (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id),
+ record_date TEXT NOT NULL, amount_ml INTEGER NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_water_user_date ON water_logs(user_id, record_date);
 CREATE TABLE IF NOT EXISTS mihealth_connections (
  user_id TEXT PRIMARY KEY REFERENCES users(id),
  encrypted_session TEXT NOT NULL,

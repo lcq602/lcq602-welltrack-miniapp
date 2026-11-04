@@ -26,6 +26,7 @@
 | --- | --- | --- |
 | `GET /api/v1/records?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=100&offset=0` | 按日期范围分页读取个人日常记录 | 默认读取近一年，单页最多 366 条 |
 | `POST /api/v1/records` | 新增一条日常记录 | 日期、体重、腰围、饮食、饮水、睡眠、习惯和备注；同一用户同日重复新增返回 409 |
+| `POST /api/v1/water` | 快捷饮水（可多次累加） | 请求 `{record_date, amount_ml}`（单次 10~2000 ml）；返回当日饮水合计 `water_ml`、目标 `goal_ml`（2000 ml）与 `progress_pct`；写入独立 `water_logs` 表，不影响同日手工记录的 409 规则，合计会合并进记录列表、首页 `water_today` 与导出 CSV |
 | `GET /api/v1/exercises?start=YYYY-MM-DD&end=YYYY-MM-DD` | 读取个人运动记录 | 默认近 30 天至未来一年，最多 500 条 |
 | `POST /api/v1/exercises` | 新增一条运动记录 | 日期、类型、分钟数和备注 |
 

@@ -123,6 +123,7 @@ export default {
         case "DELETE /api/v1/integrations/mihealth/connection": return await mihealthUnbind(env, uid);
         case "GET /api/v1/diet": return await listDiet(env, uid, url);
         case "POST /api/v1/diet": return await createDiet(request, env, uid);
+        case "POST /api/v1/water": return await createWater(request, env, uid);
         case "POST /api/v1/agent/food-photo": return await foodPhoto(request, env, uid);
         case "POST /api/v1/agent/chat": return await agentChat(request, env, uid);
         case "GET /api/v1/agent/daily-insight": return await agentDailyInsight(env, uid);
@@ -234,6 +235,44 @@ async function createRecord(request, env, uid) {
   }
 }
 
+const WATER_GOAL_ML = 2000;
+
+// ---------- 快捷饮水 (water_logs 累加, 不写 daily_records, 不影响同日手工记录) ----------
+async function waterTotals(env, uid, startStr, endStr) {
+  const { results } = await env.DB.prepare(
+    "SELECT record_date, COALESCE(SUM(amount_ml),0) AS total FROM water_logs WHERE user_id=? AND record_date BETWEEN ? AND ? GROUP BY record_date"
+  ).bind(uid, startStr, endStr).all();
+  const out = {};
+  for (const r of results) out[r.record_date] = r.total;
+  return out;
+}
+
+function mergeWater(records, totals) {
+  for (const rec of records) {
+    const extra = totals[rec.record_date] || 0;
+    if (extra) rec.water_ml = (rec.water_ml === null || rec.water_ml === undefined ? 0 : rec.water_ml) + extra;
+  }
+  return records;
+}
+
+async function createWater(request, env, uid) {
+  const b = await request.json().catch(() => ({}));
+  if (!isDateStr(b.record_date)) throw httpErr(422, "记录日期无效");
+  if (!Number.isInteger(b.amount_ml) || b.amount_ml < 10 || b.amount_ml > 2000) throw httpErr(422, "单次饮水量需在 10~2000 ml 之间");
+  await env.DB.prepare(
+    "INSERT INTO water_logs(user_id,record_date,amount_ml) VALUES(?,?,?)"
+  ).bind(uid, b.record_date, b.amount_ml).run();
+  const base = await env.DB.prepare(
+    "SELECT water_ml FROM daily_records WHERE user_id=? AND record_date=?"
+  ).bind(uid, b.record_date).first();
+  const logged = await env.DB.prepare(
+    "SELECT COALESCE(SUM(amount_ml),0) AS total FROM water_logs WHERE user_id=? AND record_date=?"
+  ).bind(uid, b.record_date).first();
+  const total = (base && base.water_ml !== null && base.water_ml !== undefined ? base.water_ml : 0) + (logged ? logged.total : 0);
+  return json({ record_date: b.record_date, added_ml: b.amount_ml, water_ml: total,
+    goal_ml: WATER_GOAL_ML, progress_pct: Math.min(100, Math.round(total / WATER_GOAL_ML * 100)) }, 201);
+}
+
 async function miByDay(env, uid, startStr, endStrExclusive) {
   const { results } = await env.DB.prepare(
     "SELECT substr(recorded_at,1,10) AS day, metric, recorded_at, value, unit, payload FROM mihealth_imports WHERE user_id=? AND recorded_at>=? AND recorded_at<? ORDER BY recorded_at ASC"
@@ -295,6 +334,17 @@ async function listRecords(env, uid, url) {
         workout_minutes: m.workout_minutes > 0 ? round1(m.workout_minutes) : null,
         is_mihealth_only: true,
       };
+    }
+  }
+  const water = await waterTotals(env, uid, start, end);
+  mergeWater(Object.values(byDay), water);
+  for (const [day, total] of Object.entries(water)) {
+    if (!byDay[day] && total > 0) {
+      byDay[day] = { id: null, record_date: day, weight: null, weight_source: null,
+        mihealth_weight: null, waist_cm: null, diet: "", water_ml: total,
+        sleep_hours: null, sleep_source: null, mihealth_sleep_hours: null,
+        habits: [], note: "", steps: null, calories: null, workout_minutes: null,
+        is_mihealth_only: false };
     }
   }
   const all = Object.values(byDay).sort((a, b) => (a.record_date < b.record_date ? 1 : -1));
@@ -425,6 +475,15 @@ async function dashboard(env, uid) {
   ).bind(uid).first();
   const manualRecords = rows.map(recordOut);
   const records = mergeMiWeights(manualRecords, importedWeights);
+  mergeWater(records, await waterTotals(env, uid, start, today));
+  const waterBase = rows.find((r) => r.record_date === today);
+  const waterLogged = await env.DB.prepare(
+    "SELECT COALESCE(SUM(amount_ml),0) AS total FROM water_logs WHERE user_id=? AND record_date=?"
+  ).bind(uid, today).first();
+  const waterTodayMl = (waterBase && waterBase.water_ml !== null && waterBase.water_ml !== undefined ? waterBase.water_ml : 0)
+    + (waterLogged ? waterLogged.total : 0);
+  const waterToday = { water_ml: waterTodayMl, goal_ml: WATER_GOAL_ML,
+    progress_pct: Math.min(100, Math.round(waterTodayMl / WATER_GOAL_ML * 100)) };
   let latestManualWeight = null;
   for (let i = manualRecords.length - 1; i >= 0; i--) {
     if (manualRecords[i].weight !== null && manualRecords[i].weight !== undefined) { latestManualWeight = manualRecords[i].weight; break; }
@@ -453,6 +512,7 @@ async function dashboard(env, uid) {
     exercise_count_7d: exRow ? exRow.n : 0, record_days_7d: manualRecords.length,
     weekly_completion: Math.min(100, Math.round(manualRecords.length / 7 * 100)),
     todos: todosMap[goal], configured: Boolean(p && p.configured), diet_today: dietToday,
+    water_today: waterToday,
     mihealth: { connected: mi.connected, last_synced_at: mi.last_synced_at, today: mi.today, latest: mi.latest },
   };
 }
@@ -547,8 +607,12 @@ const { results: exercises} = await env.DB.prepare(
 const { results: mihealth} = await env.DB.prepare(
 "SELECT metric,recorded_at,value,unit,payload FROM mihealth_imports WHERE user_id=? ORDER BY recorded_at"
 ).bind(uid).all();
+const waterMap = {};
+for (const w of (await env.DB.prepare(
+"SELECT record_date, COALESCE(SUM(amount_ml),0) AS total FROM water_logs WHERE user_id=? GROUP BY record_date"
+).bind(uid).all()).results) waterMap[w.record_date] = w.total;
 const lines = [["记录类型", "日期", "体重kg", "腰围cm", "饮食", "饮水ml", "睡眠小时", "习惯", "运动类型", "运动分钟", "卡路里kcal", "步数", "备注"].join(",")];
-for (const r of rows) lines.push(["日常", r.record_date, r.weight, r.waist_cm, r.diet, r.water_ml, r.sleep_hours, r.habits, "", "", "", "", r.note].map(csvCell).join(","));
+for (const r of rows) lines.push(["日常", r.record_date, r.weight, r.waist_cm, r.diet, (r.water_ml === null || r.water_ml === undefined ? (waterMap[r.record_date] || null) : r.water_ml + (waterMap[r.record_date] || 0)), r.sleep_hours, r.habits, "", "", "", "", r.note].map(csvCell).join(","));
 for (const r of exercises) lines.push(["运动", r.exercise_date, "", "", "", "", "", "", r.kind, r.duration_minutes, "", "", r.note].map(csvCell).join(","));
 for (const row of mihealth) {
 const payload = parseJson(row.payload, {});
