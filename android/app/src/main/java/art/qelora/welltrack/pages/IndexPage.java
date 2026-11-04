@@ -40,6 +40,7 @@ import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.Insights;
 import art.qelora.welltrack.health.PlanStore;
+import art.qelora.welltrack.health.Reminders;
 import art.qelora.welltrack.health.Streak;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
@@ -550,6 +551,9 @@ public class IndexPage extends BasePage {
 
     private void renderDashboard() {
         requestHomePlan();
+        // v2.12 记录提醒条: 当天未记录体重且提醒开启、且今天未点过「不再提醒」时出现
+        LinearLayout reminder = renderWeightReminderBanner();
+        if (reminder != null) body.addView(reminder, Ui.matchWrap(14, ctx()));
         // 2) 今日训练大卡 (AI 计划驱动, 参考图照片大卡)
         body.addView(renderTrainingCard(), Ui.matchWrap(14, ctx()));
         // 3) 三瓷砖: 饮食记录 / 有氧运动 / 身体数据
@@ -716,6 +720,45 @@ public class IndexPage extends BasePage {
         if (!first) lp.leftMargin = Ui.dp(ctx(), 4);
         if (!last) lp.rightMargin = Ui.dp(ctx(), 4);
         return lp;
+    }
+
+    /* v2.12 体重提醒条: 仅当今天记录里没有体重时出现, 温和提醒、不遮挡、不重复打扰。
+       判定口径: dashboard 记录中今天那条的 weight 为空 (哪怕今天已有饮水/运动记录也算未称体重)。
+       点「去记录」跳记录页; 点「今日不再提醒」后当天不再出现 (仅存本机)。 */
+    private LinearLayout renderWeightReminderBanner() {
+        Context c = ctx();
+        if (!Reminders.isEnabled(c) || Reminders.dismissedToday(c)) return null;
+        JSONObject todayRec = recordByDateMap.get(todayString());
+        if (todayRec != null && num(todayRec, "weight") != null) return null;
+        LinearLayout banner = Ui.column(c);
+        banner.setBackground(Ui.roundRect(Ui.CAL_SOFT, 16, c));
+        int p = Ui.dp(c, 14);
+        banner.setPadding(p, Ui.dp(c, 12), p, Ui.dp(c, 12));
+        LinearLayout top = Ui.row(c);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(Ui.text(c, "⚖️", 20, Ui.INK, false));
+        LinearLayout texts = Ui.column(c);
+        LinearLayout.LayoutParams tlp = Ui.weight1();
+        tlp.leftMargin = Ui.dp(c, 8);
+        texts.addView(Ui.text(c, "今天还没称体重", 15, Ui.INK, true));
+        texts.addView(Ui.text(c, "晨起称一次，体重趋势才准 · 提醒时间 "
+                + Reminders.timeText(c) + "（可在计划页修改）", 12, Ui.SLATE, false), Ui.matchWrap(2, c));
+        top.addView(texts, tlp);
+        banner.addView(top);
+        LinearLayout btnRow = Ui.row(c);
+        Button go = Ui.primaryButton(c, "去记录 ›");
+        go.setOnClickListener(v -> activity().switchTab(2));
+        btnRow.addView(go, Ui.weight1());
+        Button dismiss = Ui.ghostButton(c, "今日不再提醒");
+        dismiss.setOnClickListener(v -> {
+            Reminders.dismissToday(c);
+            render();
+        });
+        LinearLayout.LayoutParams dlp = Ui.weight1();
+        dlp.leftMargin = Ui.dp(c, 8);
+        btnRow.addView(dismiss, dlp);
+        banner.addView(btnRow, Ui.matchWrap(10, c));
+        return banner;
     }
 
     /* v2.5 今日饮水卡: 进度环 (目标 2000 ml) + 一键 +250ml / 自定义毫升。

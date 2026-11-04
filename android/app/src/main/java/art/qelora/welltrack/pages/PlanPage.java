@@ -1,6 +1,7 @@
 package art.qelora.welltrack.pages;
 
 import android.app.DatePickerDialog;
+import android.app.TimePickerDialog;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -24,6 +25,7 @@ import java.util.Locale;
 import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.PlanStore;
+import art.qelora.welltrack.health.Reminders;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
@@ -195,6 +197,40 @@ public class PlanPage extends BasePage {
         }
         renderPlanSections();
         renderGoalForm();
+        renderReminderCard();
+    }
+
+    /* v2.12 记录提醒卡: 提醒时间与开关仅存本机 (SharedPreferences), 不上传服务器、不发系统通知;
+       开启后, 当天未记录体重的用户在首页会看到温和提醒条。 */
+    private void renderReminderCard() {
+        Context c = ctx();
+        boolean enabled = Reminders.isEnabled(c);
+        LinearLayout card = Ui.card(c);
+        card.addView(Ui.sectionHeader(c, "记录提醒", null, null));
+        card.addView(Ui.text(c, enabled
+                ? "已开启 · 每天 " + Reminders.timeText(c) + " 提醒称体重（以首页提醒条呈现）"
+                : "已关闭 · 开启后，未记录体重的当天首页会出现提醒条",
+                13, Ui.SLATE, false), Ui.matchWrap(6, c));
+        LinearLayout row = Ui.row(c);
+        Button timeBtn = Ui.ghostButton(c, "提醒时间：" + Reminders.timeText(c) + " · 修改");
+        timeBtn.setOnClickListener(v -> new TimePickerDialog(c,
+                (view, hour, minute) -> {
+                    Reminders.setTime(c, hour, minute);
+                    renderBody();
+                }, Reminders.hour(c), Reminders.minute(c), true).show());
+        row.addView(timeBtn, Ui.weight1());
+        Button toggle = enabled ? Ui.ghostButton(c, "关闭提醒") : Ui.primaryButton(c, "开启提醒");
+        toggle.setOnClickListener(v -> {
+            Reminders.setEnabled(c, !Reminders.isEnabled(c));
+            renderBody();
+        });
+        LinearLayout.LayoutParams tlp = Ui.weight1();
+        tlp.leftMargin = Ui.dp(c, 8);
+        row.addView(toggle, tlp);
+        card.addView(row, Ui.matchWrap(10, c));
+        card.addView(Ui.text(c, "时间仅保存在本机，不发送系统通知、不上传服务器；当天点过「今日不再提醒」后不再重复出现。",
+                11, Ui.MUTED, false), Ui.matchWrap(6, c));
+        body.addView(card, Ui.matchWrap(12, c));
     }
 
     private void renderEmpty() {
