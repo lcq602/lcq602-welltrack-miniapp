@@ -310,6 +310,12 @@ public class PlanPage extends BasePage {
                     Ui.matchWrap(14, c));
             card.addView(progressRow("活动消耗", actual[1], day.optInt("calories_target", 0), Ui.CAL, "千卡"),
                     Ui.matchWrap(10, c));
+            JSONArray dayActions = day.optJSONArray("actions");
+            if (dayActions != null && dayActions.length() > 0) {
+                Button workoutBtn = Ui.primaryButton(c, "▶ 开始跟练");
+                workoutBtn.setOnClickListener(v -> activity().openWorkout(day));
+                card.addView(workoutBtn, Ui.matchWrap(12, c));
+            }
         }
         return card;
     }

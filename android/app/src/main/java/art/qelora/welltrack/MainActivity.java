@@ -19,6 +19,7 @@ import art.qelora.welltrack.pages.IndexPage;
 import art.qelora.welltrack.pages.MinePage;
 import art.qelora.welltrack.pages.PlanPage;
 import art.qelora.welltrack.pages.RecordsPage;
+import art.qelora.welltrack.pages.WorkoutPage;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
@@ -166,6 +167,15 @@ public class MainActivity extends Activity {
     public void openExercise() {
         if (overlayPage != null) return;
         overlayPage = new ExercisePage(this);
+        pageHost.addView(overlayPage, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        overlayPage.onShow();
+    }
+
+    /** 打开跟练覆盖页 (v2.4, 与运动页同一覆盖层机制) */
+    public void openWorkout(org.json.JSONObject day) {
+        if (overlayPage != null) return;
+        overlayPage = new WorkoutPage(this, day);
         pageHost.addView(overlayPage, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         overlayPage.onShow();
