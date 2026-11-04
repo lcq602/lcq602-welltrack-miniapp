@@ -3,7 +3,9 @@ package art.qelora.welltrack.pages;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
+import android.app.TimePickerDialog;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -51,6 +53,10 @@ import art.qelora.welltrack.ui.Ui;
  * 历史区 (总数副标题 + 三段筛选 + 彩色指标标签)。
  * 接口不变: POST /api/v1/records; GET /api/v1/records?limit=60;
  * 导出 /api/v1/export.csv 与 /api/v1/backup 写应用下载目录。
+ * v2.8 睡眠记录完善: 入睡/起床时间选择 (TimePickerDialog, 跨夜自动算时长,
+ * 时长写入 sleep_hours 随记录保存; 入睡/起床时刻仅存本机 SharedPreferences,
+ * 不新增后端字段); 对照行复用 records 列表的 mihealth_sleep_hours
+ * (Worker 合并口径, FastAPI 记录列表无此字段时对照行自动隐藏, 不误报)。
  */
 public class RecordsPage extends BasePage {
     private static final String[] HABIT_NAMES = {"运动", "均衡饮食", "喝够水", "按时睡眠", "减少久坐"};
@@ -74,6 +80,13 @@ public class RecordsPage extends BasePage {
     /* v2.5 饮水快捷记录: 今日合计 + 进度条 + 一键加水 (接口 /api/v1/water) */
     private TextView waterQuickText;
     private LinearLayout waterBarBox;
+
+    /* v2.8 睡眠时间: 入睡/起床时刻 (自午夜起分钟数, -1 = 未设置), 仅存本机 */
+    private int bedtimeMin = -1;
+    private int wakeupMin = -1;
+    private Button bedtimeBtn, wakeupBtn;
+    private TextView sleepTimeSummary, sleepCompareView;
+    private double miSleepForCompare = -1; // 仅小米有数据且无手工睡眠时可一键填入
 
     /* v2.3 饮食记录: 今日条目列表 + 合计 (接口 /api/v1/diet) */
     private static final int REQ_GALLERY = 4101;
@@ -202,6 +215,29 @@ public class RecordsPage extends BasePage {
         waterQuick.addView(waterBtnRow, Ui.matchWrap(8, c));
         statusCard.addView(waterQuick, Ui.matchWrap(10, c));
         sleepInput = statusRow(statusCard, Ui.SLEEP, "睡眠", "如 7.5", "小时", true, false);
+        // v2.8: 入睡/起床时间选择 + 与小米睡眠对照 (时长自动填入上方睡眠栏)
+        LinearLayout sleepTimeRow = Ui.row(c);
+        bedtimeBtn = Ui.ghostButton(c, "🌙 入睡 --:--");
+        bedtimeBtn.setOnClickListener(v -> pickSleepTime(true));
+        sleepTimeRow.addView(bedtimeBtn, Ui.weight1());
+        wakeupBtn = Ui.ghostButton(c, "☀️ 起床 --:--");
+        wakeupBtn.setOnClickListener(v -> pickSleepTime(false));
+        LinearLayout.LayoutParams wlp = Ui.weight1();
+        wlp.leftMargin = Ui.dp(c, 8);
+        sleepTimeRow.addView(wakeupBtn, wlp);
+        statusCard.addView(sleepTimeRow, Ui.matchWrap(8, c));
+        sleepTimeSummary = Ui.text(c, "点入睡 / 起床选时间，自动算出时长并填入睡眠栏", 12.5f, Ui.SLATE, false);
+        sleepTimeSummary.setOnClickListener(v -> fillSleepFromTimes(false));
+        statusCard.addView(sleepTimeSummary, Ui.matchWrap(4, c));
+        sleepCompareView = Ui.text(c, "", 12.5f, Ui.SLEEP, false);
+        sleepCompareView.setVisibility(View.GONE);
+        sleepCompareView.setOnClickListener(v -> {
+            if (miSleepForCompare >= 0) {
+                sleepInput.setText(fmtSleepHours(miSleepForCompare));
+                toast("已填入小米手环监测的睡眠时长");
+            }
+        });
+        statusCard.addView(sleepCompareView, Ui.matchWrap(4, c));
         dietInput = statusRow(statusCard, Ui.CAL, "饮食简记", "例如：三餐规律，晚餐蔬菜过半，无夜宵", null, false, false);
         content.addView(statusCard, Ui.matchWrap(12, c));
 
@@ -431,6 +467,122 @@ public class RecordsPage extends BasePage {
         }
         if (alreadyView != null) alreadyView.setVisibility(alreadySaved ? View.VISIBLE : View.GONE);
         updateSaveButton();
+        restoreSleepTimes();
+        updateSleepCompare();
+    }
+
+    /* ---------- v2.8 睡眠时间: 入睡/起床选择、算时长、与小米对照 ---------- */
+    private SharedPreferences sleepPrefs() {
+        return ctx().getSharedPreferences("welltrack_sleep_times", Context.MODE_PRIVATE);
+    }
+
+    private static String fmtClock(int minutes) {
+        return String.format(Locale.US, "%02d:%02d", minutes / 60, minutes % 60);
+    }
+
+    private static String fmtSleepHours(double hours) {
+        double rounded = Math.round(hours * 10) / 10.0;
+        if (rounded == Math.floor(rounded)) return String.valueOf((int) rounded);
+        return String.valueOf(rounded);
+    }
+
+    /** 跨夜时长 (分钟): 起床 <= 入睡时加一天; 0 表示两时刻相同, 不合法 */
+    private static int sleepDurationMin(int bedtime, int wakeup) {
+        int d = wakeup - bedtime;
+        if (d <= 0) d += 24 * 60;
+        return d == 24 * 60 ? 0 : d;
+    }
+
+    private void pickSleepTime(final boolean isBedtime) {
+        int initial = isBedtime ? (bedtimeMin >= 0 ? bedtimeMin : 23 * 60)
+                : (wakeupMin >= 0 ? wakeupMin : 7 * 60);
+        new TimePickerDialog(ctx(), (view, hour, minute) -> {
+            int value = hour * 60 + minute;
+            if (isBedtime) bedtimeMin = value; else wakeupMin = value;
+            sleepPrefs().edit().putInt(recordDate + "_bed", bedtimeMin)
+                    .putInt(recordDate + "_wake", wakeupMin).apply();
+            refreshSleepTimeLabels();
+            fillSleepFromTimes(true);
+        }, initial / 60, initial % 60, true).show();
+    }
+
+    private void refreshSleepTimeLabels() {
+        if (bedtimeBtn != null) bedtimeBtn.setText(bedtimeMin >= 0
+                ? "🌙 入睡 " + fmtClock(bedtimeMin) : "🌙 入睡 --:--");
+        if (wakeupBtn != null) wakeupBtn.setText(wakeupMin >= 0
+                ? "☀️ 起床 " + fmtClock(wakeupMin) : "☀️ 起床 --:--");
+    }
+
+    /**
+     * 由入睡/起床算时长并更新提示; fromPicker=true 时直接填入睡眠栏,
+     * 否则 (切日期恢复) 只展示算出的时长, 点提示行才填入, 避免覆盖手工输入。
+     */
+    private void fillSleepFromTimes(boolean fromPicker) {
+        if (sleepTimeSummary == null) return;
+        if (bedtimeMin < 0 || wakeupMin < 0) {
+            sleepTimeSummary.setText("点入睡 / 起床选时间，自动算出时长并填入睡眠栏");
+            return;
+        }
+        int duration = sleepDurationMin(bedtimeMin, wakeupMin);
+        if (duration <= 0) {
+            sleepTimeSummary.setText("入睡与起床时间相同，请重新选择");
+            return;
+        }
+        double hours = duration / 60.0;
+        String verdict = hours < 7 ? "偏少，建议睡满 7–8 小时"
+                : (hours <= 9 ? "在 7–9 小时健康区间内" : "偏长，留意作息规律");
+        sleepTimeSummary.setText("入睡 " + fmtClock(bedtimeMin) + " → 起床 " + fmtClock(wakeupMin)
+                + " · 睡眠 " + fmtSleepHours(hours) + " 小时 · " + verdict
+                + (fromPicker ? "" : "（点此填入睡眠栏）"));
+        if (fromPicker && sleepInput != null) {
+            sleepInput.setText(fmtSleepHours(hours));
+            toast("已按入睡 / 起床算出 " + fmtSleepHours(hours) + " 小时");
+        }
+    }
+
+    private void restoreSleepTimes() {
+        SharedPreferences prefs = sleepPrefs();
+        bedtimeMin = prefs.getInt(recordDate + "_bed", -1);
+        wakeupMin = prefs.getInt(recordDate + "_wake", -1);
+        refreshSleepTimeLabels();
+        fillSleepFromTimes(false);
+    }
+
+    /** 对照行: 以 records 列表的 mihealth_sleep_hours 为小米值 (Worker 口径)。 */
+    private void updateSleepCompare() {
+        if (sleepCompareView == null) return;
+        miSleepForCompare = -1;
+        JSONObject dayRec = null;
+        for (JSONObject r : records) {
+            if (r != null && recordDate.equals(r.optString("record_date"))) { dayRec = r; break; }
+        }
+        if (dayRec == null) { sleepCompareView.setVisibility(View.GONE); return; }
+        boolean hasMiData = !dayRec.isNull("mihealth_sleep_hours")
+                || "mihealth".equals(dayRec.optString("weight_source"))
+                || !dayRec.isNull("steps") || dayRec.optBoolean("is_mihealth_only");
+        if (!hasMiData) { sleepCompareView.setVisibility(View.GONE); return; }
+        if (dayRec.isNull("mihealth_sleep_hours")) {
+            sleepCompareView.setText("⌚ 当日小米数据已同步，但无睡眠监测记录");
+            sleepCompareView.setVisibility(View.VISIBLE);
+            return;
+        }
+        double mi = dayRec.optDouble("mihealth_sleep_hours", 0);
+        boolean manual = "manual".equals(dayRec.optString("sleep_source")) && !dayRec.isNull("sleep_hours");
+        if (!manual) {
+            miSleepForCompare = mi;
+            sleepCompareView.setText("⌚ 小米手环监测睡眠 " + fmtSleepHours(mi)
+                    + " 小时（点此填入睡眠栏）");
+            sleepCompareView.setVisibility(View.VISIBLE);
+            return;
+        }
+        double mine = dayRec.optDouble("sleep_hours", 0);
+        double diff = Math.abs(mine - mi);
+        String cmp = diff < 0.5 ? "两者接近"
+                : (diff < 1 ? "相差 " + fmtSleepHours(diff) + " 小时"
+                : "相差 " + fmtSleepHours(diff) + " 小时，差距较大，以体感为准");
+        sleepCompareView.setText("⌚ 小米手环监测 " + fmtSleepHours(mi) + " 小时，你记录 "
+                + fmtSleepHours(mine) + " 小时 · " + cmp);
+        sleepCompareView.setVisibility(View.VISIBLE);
     }
 
     /* ---------- v2.5 饮水快捷记录 ---------- */

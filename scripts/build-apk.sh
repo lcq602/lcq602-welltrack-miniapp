@@ -35,7 +35,7 @@ echo "[2/6] aapt2 link"
   -R "$OUT/compiled.zip" --auto-add-overlay \
   --java "$OUT/gen" \
   --min-sdk-version 24 --target-sdk-version 34 \
-  --version-code 9 --version-name 2.7
+  --version-code 10 --version-name 2.8
 
 echo "[3/6] javac"
 "$JAVA_HOME/bin/javac" -encoding UTF-8 -source 8 -target 8 -nowarn -cp "$JAR" -d "$OUT/classes" \
