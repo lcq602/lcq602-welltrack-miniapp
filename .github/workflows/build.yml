@@ -65,12 +65,13 @@ jobs:
       - name: 标签发布到 Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
+        # 说明: Release 正文由发布脚本直接写 (含 Drive 下载链接)。默认
+        # GITHUB_TOKEN 无权更新由其他令牌创建的 Release (v2.5 标签运行即因此
+        # 在更新 Release 一步失败, 但产物上传本身已成功), 故该步仅作尽力附加,
+        # 失败不影响整轮 CI 结果。
+        continue-on-error: true
         with:
           files: dist/*.zip
-          # 说明: Release 正文由发布脚本直接写 (含 Drive 下载链接), 这里不再调
-          # generate-release-notes 接口 —— 默认 GITHUB_TOKEN 无该接口权限, 会导致
-          # 标签触发的运行在“打包发布物”一步失败 (v2.4 标签运行即因此失败,
-          # 但产物上传本身已成功)。
 
   android-apk:
     name: 安卓 APK 构建
