@@ -679,7 +679,7 @@ async function deleteDiet(env, uid, id) {
 const FOOD_PHOTO_SYSTEM = `你是食物识别与营养估算助手。识别照片中的每一种食物, 估算每种的重量 (克) 与热量 (千卡)。
 只输出一个 JSON 对象, 不要输出任何其他文字或 Markdown 标记:
 {"items":[{"name":"食物名","grams":150,"calories_kcal":200}],"note":"一句话说明识别把握与不确定处"}
-要求: 同种食物只出现一次; 克数按照片中实际份量估算 (参考餐具大小); 热量按常见做法估算; 看不清的食物不要编造, 在 note 中说明。`;
+要求: 最多列 8 项; 完整食物按整体算一项 (如汉堡算一项, 不要把面包/肉饼/生菜拆开列), 只有照片中确实分开摆放的才分开列; 同种食物只出现一次, 绝不重复; 克数按照片中实际份量估算 (参考餐具大小); 热量按常见做法估算; 看不清的食物不要编造, 在 note 中说明。`;
 
 async function foodPhoto(request, env, uid) {
   const b = await request.json().catch(() => ({}));
@@ -694,16 +694,38 @@ async function foodPhoto(request, env, uid) {
   } catch (e) { throw httpErr(422, "图片解码失败"); }
   const model = env.VISION_MODEL || "@cf/meta/llama-3.2-11b-vision-instruct";
   const result = await env.AI.run(model, { image: Array.from(bytes), prompt: FOOD_PHOTO_SYSTEM + "\n\n请识别这张照片里的食物。", max_tokens: 900, temperature: 0.2 });
-  const text = String((result && (result.response || result.description || result.text)) || "");
+  const respVal = result && (result.response !== undefined ? result.response : (result.description || result.text));
   let raw = null;
-  const start = text.indexOf("{"), end = text.lastIndexOf("}");
-  if (start >= 0 && end > start) { try { raw = JSON.parse(text.slice(start, end + 1)); } catch (e) { raw = null; } }
+  if (respVal && typeof respVal === "object") raw = respVal;
+  else {
+    const text = String(respVal || "");
+    const start = text.indexOf("{"), end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) { try { raw = JSON.parse(text.slice(start, end + 1)); } catch (e) { raw = null; } }
+    if (!raw && start >= 0) {
+      // 输出被截断时抢救已完整生成的 item 对象
+      const salvaged = [];
+      const re = /\{"name"\s*:\s*"([^"]+)"\s*,\s*"grams"\s*:\s*(\d+)\s*,\s*"calories_kcal"\s*:\s*(\d+)\s*\}/g;
+      let m;
+      while ((m = re.exec(text)) !== null && salvaged.length < 12) {
+        salvaged.push({ name: m[1], grams: Number(m[2]), calories_kcal: Number(m[3]) });
+      }
+      if (salvaged.length) raw = { items: salvaged, note: "识别结果较多, 已自动合并同类项, 请核对" };
+    }
+  }
   if (!raw || !Array.isArray(raw.items)) throw httpErr(502, "没有识别出食物, 换个角度或更近一点再拍");
-  const items = raw.items.filter((it) => it && typeof it.name === "string" && it.name.trim()).slice(0, 12).map((it) => ({
-    name: String(it.name).trim().slice(0, 40),
-    grams: Number.isFinite(Number(it.grams)) ? Math.min(3000, Math.max(1, Math.round(Number(it.grams)))) : null,
-    calories_kcal: Number.isFinite(Number(it.calories_kcal)) ? Math.min(5000, Math.max(0, Math.round(Number(it.calories_kcal)))) : 0,
-  }));
+  const seen = new Map();
+  for (const it of raw.items) {
+    if (!it || typeof it.name !== "string" || !it.name.trim()) continue;
+    const key = String(it.name).trim().slice(0, 40);
+    const norm = {
+      name: key,
+      grams: Number.isFinite(Number(it.grams)) ? Math.min(3000, Math.max(1, Math.round(Number(it.grams)))) : null,
+      calories_kcal: Number.isFinite(Number(it.calories_kcal)) ? Math.min(5000, Math.max(0, Math.round(Number(it.calories_kcal)))) : 0,
+    };
+    const prev = seen.get(key);
+    if (!prev || norm.calories_kcal > prev.calories_kcal) seen.set(key, norm);
+  }
+  const items = [...seen.values()].slice(0, 8);
   if (!items.length) throw httpErr(502, "没有识别出食物, 换个角度或更近一点再拍");
   const total = items.reduce((a, it) => a + it.calories_kcal, 0);
   return json({ items, total_kcal: total, note: typeof raw.note === "string" ? raw.note.slice(0, 200) : "", model });
