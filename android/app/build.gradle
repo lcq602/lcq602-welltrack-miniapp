@@ -8,8 +8,8 @@ android {
         applicationId "art.qelora.welltrack"
         minSdk 24
         targetSdk 34
-        versionCode 7
-        versionName "2.5"
+        versionCode 8
+        versionName "2.6"
     }
     buildTypes {
         release { minifyEnabled false }

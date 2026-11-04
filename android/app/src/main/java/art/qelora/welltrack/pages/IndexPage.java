@@ -40,6 +40,7 @@ import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.Insights;
 import art.qelora.welltrack.health.PlanStore;
+import art.qelora.welltrack.health.Streak;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 import art.qelora.welltrack.ui.VitalityRings;
@@ -93,6 +94,10 @@ public class IndexPage extends BasePage {
     private boolean miConnected = false;
     private final Map<String, JSONObject> recordByDateMap = new HashMap<>();
 
+    // v2.6 连续打卡 (Streak): 首页展示, 我的页展示徽章墙
+    private Streak.Result streakResult;
+    private boolean streakLoading = false;
+
     // v2.2 本周计划 (PlanStore): 训练大卡 / 三瓷砖 / 周条 / 今日摘要共用
     private JSONObject homePlan;         // plan 对象本身, 未就绪为 null
     private String homePlanSig = "";     // week_start+今日focus+source 签名, 防重复渲染
@@ -124,8 +129,26 @@ public class IndexPage extends BasePage {
     public void onShow() {
         super.onShow();
         load();
+        loadStreak();
         refreshHandler.removeCallbacks(refreshLoop);
         refreshHandler.postDelayed(refreshLoop, 60000);
+    }
+
+    /* v2.6 打卡数据: 随页面显示拉取一次 (60 秒定时刷新不重复拉, 避免刷接口) */
+    private void loadStreak() {
+        if (streakLoading) return;
+        streakLoading = true;
+        Streak.load(ctx(), new Streak.Listener() {
+            @Override public void onResult(Streak.Result result) {
+                streakLoading = false;
+                streakResult = result;
+                if (data != null && configured) render();
+            }
+            @Override public void onError(String message) {
+                streakLoading = false;
+                // 打卡卡片静默缺席, 不打扰用户
+            }
+        });
     }
 
     @Override
@@ -535,6 +558,8 @@ public class IndexPage extends BasePage {
         body.addView(renderWaterCard(), Ui.matchWrap(12, ctx()));
         // 4) 本周计划: 周条 + 今日摘要
         body.addView(renderWeekStrip(), Ui.matchWrap(18, ctx()));
+        // 4.5) v2.6 连续打卡卡: 火焰天数 + 本周记录点 + 下一徽章提示
+        if (streakResult != null) body.addView(renderStreakCard(), Ui.matchWrap(18, ctx()));
 
         if (miConnected) {
             // 3) 活力卡
@@ -769,6 +794,48 @@ public class IndexPage extends BasePage {
                 })
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    /* v2.6 连续打卡卡: 火焰天数 + 本周记录点 + 下一徽章提示, 点击去记录页 */
+    private LinearLayout renderStreakCard() {
+        Context c = ctx();
+        LinearLayout card = Ui.card(c);
+        card.addView(Ui.sectionHeader(c, "连续打卡", "去记录 ›", v -> activity().switchTab(2)));
+        LinearLayout main = Ui.row(c);
+        main.setGravity(Gravity.CENTER_VERTICAL);
+        main.addView(Ui.text(c, "🔥", 30, Ui.INK, false));
+        LinearLayout texts = Ui.column(c);
+        LinearLayout.LayoutParams tlp = Ui.weight1();
+        tlp.leftMargin = Ui.dp(c, 10);
+        texts.addView(Ui.text(c, streakResult.current + " 天连续记录", 18, Ui.INK, true));
+        texts.addView(Ui.text(c, "最长 " + streakResult.longest + " 天 · 本周已记录 "
+                + streakResult.weekRecordDays + " / 7 天 · 本周运动 " + streakResult.weekWorkoutDays + " 天",
+                12, Ui.SLATE, false), Ui.matchWrap(2, c));
+        main.addView(texts, tlp);
+        card.addView(main, Ui.matchWrap(12, c));
+        String[] names = {"一", "二", "三", "四", "五", "六", "日"};
+        LinearLayout dots = Ui.row(c);
+        String today = Streak.todayString();
+        for (int i = 0; i < 7; i++) {
+            String ds = streakResult.weekDates.get(i);
+            boolean done = streakResult.recordDates.contains(ds);
+            boolean isToday = ds.equals(today);
+            LinearLayout cell = Ui.column(c);
+            cell.setGravity(Gravity.CENTER_HORIZONTAL);
+            TextView wd = Ui.text(c, names[i], 11, isToday ? Ui.LIME : Ui.MUTED, isToday);
+            wd.setGravity(Gravity.CENTER);
+            cell.addView(wd);
+            TextView dot = Ui.text(c, done ? "●" : "○", 14, done ? Ui.LIME : Ui.MUTED, false);
+            dot.setGravity(Gravity.CENTER);
+            cell.addView(dot, Ui.matchWrap(2, c));
+            dots.addView(cell, Ui.weight1());
+        }
+        card.addView(dots, Ui.matchWrap(10, c));
+        card.addView(Ui.text(c, "🎯 " + streakResult.nextHint, 13, Ui.PRIMARY_DARK, true),
+                Ui.matchWrap(8, c));
+        card.addView(Ui.text(c, "连续记录：当天有体重 / 饮食 / 饮水 / 运动任一记录即算一天（含小米同步日）。",
+                11, Ui.MUTED, false), Ui.matchWrap(6, c));
+        return card;
     }
 
     /* 本周计划: 章节头 + 周条 (今天荧光绿方块, 活动日小圆点) + 今日摘要行 */

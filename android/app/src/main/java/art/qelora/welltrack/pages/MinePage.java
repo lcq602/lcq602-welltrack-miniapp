@@ -24,6 +24,7 @@ import java.util.Map;
 import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.Insights;
+import art.qelora.welltrack.health.Streak;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
@@ -45,6 +46,9 @@ public class MinePage extends BasePage {
     private boolean codeReady;
 
     private TextView heroName, heroDesc, heroPill;
+    private LinearLayout achievementsCard;
+    private Streak.Result streakResult;
+    private boolean streakLoading = false, streakFailed = false;
     private LinearLayout baselineBox;
     private TextView baselineNote;
     private TextView baselineLink;
@@ -115,6 +119,11 @@ public class MinePage extends BasePage {
         heroRow.addView(meta, mlp);
         hero.addView(heroRow);
         content.addView(hero, Ui.matchWrap(14, ctx()));
+
+        // v2.6 打卡与成就卡 (数据随 onShow 拉取, 见 renderAchievements)
+        achievementsCard = Ui.card(ctx());
+        content.addView(achievementsCard, Ui.matchWrap(14, ctx()));
+        renderAchievements();
 
         // 基础体征卡片
         LinearLayout baseline = Ui.card(ctx());
@@ -203,6 +212,78 @@ public class MinePage extends BasePage {
         super.onShow();
         loadProfile();
         loadMiHealth();
+        loadStreak();
+    }
+
+    /* v2.6 打卡与成就: 与首页共用 Streak 计算, 失败时保留友好占位不报错 */
+    private void loadStreak() {
+        if (streakLoading) return;
+        streakLoading = true;
+        Streak.load(ctx(), new Streak.Listener() {
+            @Override public void onResult(Streak.Result result) {
+                streakLoading = false;
+                streakFailed = false;
+                streakResult = result;
+                renderAchievements();
+            }
+            @Override public void onError(String message) {
+                streakLoading = false;
+                streakFailed = true;
+                renderAchievements();
+            }
+        });
+    }
+
+    private void renderAchievements() {
+        if (achievementsCard == null) return;
+        achievementsCard.removeAllViews();
+        achievementsCard.addView(Ui.sectionTitle(ctx(), "打卡与成就"));
+        if (streakResult == null) {
+            TextView state = Ui.text(ctx(), streakFailed
+                    ? "暂无打卡数据，记录一天即可开启连续打卡。"
+                    : "正在计算打卡数据…", 13, Ui.MUTED, false);
+            state.setGravity(Gravity.CENTER);
+            state.setPadding(0, Ui.dp(ctx(), 12), 0, Ui.dp(ctx(), 12));
+            achievementsCard.addView(state, Ui.matchWrap(8, ctx()));
+            return;
+        }
+        LinearLayout summary = Ui.row(ctx());
+        summary.addView(Ui.text(ctx(), "🔥 " + streakResult.current + " 天连续记录",
+                16, Ui.INK, true), Ui.weight1());
+        summary.addView(Ui.text(ctx(), "最长 " + streakResult.longest + " 天 · 本周 "
+                + streakResult.weekRecordDays + " / 7 天", 12, Ui.SLATE, false));
+        achievementsCard.addView(summary, Ui.matchWrap(12, ctx()));
+        for (int i = 0; i < streakResult.badges.size(); i += 2) {
+            LinearLayout row = Ui.row(ctx());
+            row.setGravity(Gravity.TOP);
+            row.addView(badgeCell(streakResult.badges.get(i)), Ui.weight1());
+            row.addView(spacerW(10));
+            if (i + 1 < streakResult.badges.size()) {
+                row.addView(badgeCell(streakResult.badges.get(i + 1)), Ui.weight1());
+            } else {
+                row.addView(new View(ctx()), Ui.weight1());
+            }
+            achievementsCard.addView(row, Ui.matchWrap(i == 0 ? 10 : 8, ctx()));
+        }
+        achievementsCard.addView(Ui.text(ctx(), "🎯 " + streakResult.nextHint,
+                13, Ui.PRIMARY_DARK, true), Ui.matchWrap(10, ctx()));
+    }
+
+    private LinearLayout badgeCell(Streak.Badge badge) {
+        LinearLayout cell = Ui.column(ctx());
+        cell.setBackground(Ui.roundRect(badge.earned ? Ui.GREEN_SOFT : Ui.SOFT, 16, ctx()));
+        int p = Ui.dp(ctx(), 12);
+        cell.setPadding(p, p, p, p);
+        LinearLayout top = Ui.row(ctx());
+        top.addView(Ui.text(ctx(), badge.icon, 16, Ui.INK, false));
+        TextView name = Ui.text(ctx(), " " + badge.name, 14,
+                badge.earned ? Ui.INK : Ui.SLATE, true);
+        top.addView(name, Ui.weight1());
+        top.addView(Ui.text(ctx(), badge.earned ? "已获得" : "未解锁", 11,
+                badge.earned ? Ui.PRIMARY_DARK : Ui.MUTED, true));
+        cell.addView(top);
+        cell.addView(Ui.text(ctx(), badge.desc, 12, Ui.MUTED, false), Ui.matchWrap(4, ctx()));
+        return cell;
     }
 
     /* ---------------- 数据加载 ---------------- */
