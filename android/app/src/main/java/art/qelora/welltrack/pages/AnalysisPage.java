@@ -1,6 +1,7 @@
 package art.qelora.welltrack.pages;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.DashPathEffect;
@@ -46,6 +47,12 @@ public class AnalysisPage extends BasePage {
 
     private String period = "week";
     private String chartTab = "weight";
+    // v2.7 AI 健康周报: 本周报告文本 (按周起始日缓存在 SharedPreferences, 本周内复用)
+    private String reportText;
+    private boolean reportLoading = false;
+    private String reportError = "";
+    private String reportKey = "";
+    private boolean reportFromAi = true;
     private String calendarMonth = currentMonth();
     private JSONObject summary;
     private String loadError = "";
@@ -202,6 +209,11 @@ public class AnalysisPage extends BasePage {
 
         body.addView(insightsCard(), Ui.matchWrap(14, ctx()));
 
+        if (period.equals("week")) {
+            loadCachedReport();
+            body.addView(weeklyReportCard(), Ui.matchWrap(14, ctx()));
+        }
+
         buildBento();
 
         if (period.equals("calendar")) {
@@ -327,6 +339,192 @@ public class AnalysisPage extends BasePage {
         row.addView(recBox, rblp);
         card.addView(row, Ui.matchWrap(12, ctx()));
         return card;
+    }
+
+    /* ---------------- AI 健康周报 (v2.7, 仅本周视图) ---------------- */
+
+    /** 按本周起始日读取缓存的周报 (本周内复用, 不重复调智能体) */
+    private void loadCachedReport() {
+        String key = "weekly_report_" + summary.optString("start");
+        if (key.equals(reportKey)) return;
+        reportKey = key;
+        SharedPreferences prefs = ctx().getSharedPreferences("welltrack", Context.MODE_PRIVATE);
+        String cached = prefs.getString(key, "");
+        if (!cached.isEmpty()) {
+            reportText = cached;
+            reportFromAi = true;
+            reportError = "";
+        }
+    }
+
+    /** 本周亮点统计: 达标天数 / 最佳步数日 / 体重变化, 供周报卡与规则版小结共用 */
+    private static class WeekStats {
+        int stepDays, calDays, workoutDays;
+        int bestSteps; String bestDate = "";
+        Double weightChange; // null 表示无体重数据
+        double avgSleep;
+    }
+
+    private WeekStats weekStats() {
+        WeekStats s = new WeekStats();
+        JSONArray days = days();
+        Double firstW = null, lastW = null;
+        double sleepSum = 0; int sleepN = 0;
+        for (int i = 0; i < days.length(); i++) {
+            JSONObject d = days.optJSONObject(i);
+            if (d == null) continue;
+            if (d.optInt("steps", 0) >= Insights.STEP_GOAL) s.stepDays++;
+            if (d.optDouble("calories", 0) >= Insights.CAL_GOAL) s.calDays++;
+            if (d.optDouble("workout_minutes", 0) > 0) s.workoutDays++;
+            int steps = d.optInt("steps", 0);
+            if (steps > s.bestSteps) { s.bestSteps = steps; s.bestDate = d.optString("record_date"); }
+            if (!d.isNull("weight")) {
+                if (firstW == null) firstW = d.optDouble("weight");
+                lastW = d.optDouble("weight");
+            }
+            if (!d.isNull("sleep_hours")) { sleepSum += d.optDouble("sleep_hours"); sleepN++; }
+        }
+        if (firstW != null && lastW != null) s.weightChange = lastW - firstW;
+        s.avgSleep = sleepN > 0 ? sleepSum / sleepN : 0;
+        return s;
+    }
+
+    /** AI 不可用时的规则版小结: 只用本周真实统计拼句子, 不编造 */
+    private String fallbackReport(WeekStats s) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("🌟 本周亮点\n");
+        if (s.bestSteps > 0) {
+            String bd = s.bestDate.length() >= 10 ? s.bestDate.substring(5) : s.bestDate;
+            sb.append("· 单日最高步数 ").append(s.bestSteps).append(" 步 (").append(bd).append(")\n");
+        }
+        sb.append("· 步数达标 ").append(s.stepDays).append(" 天, 消耗达标 ")
+                .append(s.calDays).append(" 天, 运动 ").append(s.workoutDays).append(" 天\n");
+        sb.append("⚠️ 需要注意\n");
+        if (s.avgSleep > 0 && s.avgSleep < 7) {
+            sb.append("· 平均睡眠 ").append(fmtNum(s.avgSleep)).append(" 小时, 不足 7 小时, 优先补作息\n");
+        } else if (s.workoutDays < 3) {
+            sb.append("· 本周运动 ").append(s.workoutDays).append(" 次, 未满 3 次, 可再补 1-2 次快走或骑行\n");
+        } else {
+            sb.append("· 本周没有明显短板, 继续保持节奏即可\n");
+        }
+        sb.append("🎯 下周建议\n");
+        sb.append("· 每天先保证 8000 步与 400 千卡消耗, 睡眠目标 7-8 小时, 运动 3 次起");
+        if (s.weightChange != null && Math.abs(s.weightChange) >= 0.2) {
+            sb.append(", 体重本周").append(s.weightChange < 0 ? "下降 " : "上升 ")
+                    .append(fmtNum(Math.abs(s.weightChange))).append(" kg, 幅度温和");
+        }
+        return sb.toString();
+    }
+
+    private LinearLayout weeklyReportCard() {
+        LinearLayout card = Ui.card(ctx());
+        card.addView(Ui.sectionHeader(ctx(), "AI 健康周报", null, null));
+        TextView sub = Ui.text(ctx(),
+                summary.optString("start") + " — " + summary.optString("end") + " · 基于小米同步与手工记录",
+                11, Ui.MUTED, false);
+        card.addView(sub, Ui.matchWrap(4, ctx()));
+
+        WeekStats s = weekStats();
+        boolean hasData = days().length() > 0 || summary.optDouble("total_steps", 0) > 0
+                || summary.optDouble("total_calories", 0) > 0;
+        if (!hasData) {
+            card.addView(Ui.text(ctx(), "本周还没有同步到数据。连接小米运动健康并完成一次同步后, 这里可以生成你的第一份周报。",
+                    13, Ui.SLATE, false), Ui.matchWrap(8, ctx()));
+            return card;
+        }
+
+        // 本地亮点行 (不依赖 AI, 永远可看)
+        String weightTxt = s.weightChange == null ? "体重 —"
+                : "体重 " + (s.weightChange < 0 ? "↓" : "↑") + fmtNum(Math.abs(s.weightChange)) + " kg";
+        TextView highlights = Ui.text(ctx(),
+                "步数达标 " + s.stepDays + " 天 · 消耗达标 " + s.calDays + " 天 · 运动 "
+                        + s.workoutDays + " 天 · " + weightTxt,
+                12.5f, Ui.INK, true);
+        highlights.setBackground(Ui.roundRect(Ui.GREEN_SOFT, 10, ctx()));
+        highlights.setPadding(Ui.dp(ctx(), 12), Ui.dp(ctx(), 9), Ui.dp(ctx(), 12), Ui.dp(ctx(), 9));
+        card.addView(highlights, Ui.matchWrap(8, ctx()));
+
+        if (reportLoading) {
+            card.addView(Ui.text(ctx(), "智能体正在写本周周报…", 13, Ui.SLATE, false), Ui.matchWrap(10, ctx()));
+        } else if (reportText != null && !reportText.isEmpty()) {
+            if (!reportFromAi) {
+                card.addView(Ui.text(ctx(), "AI 暂不可用, 下面是规则版小结 (数据真实, 仅无 AI 点评):",
+                        11, Ui.MUTED, false), Ui.matchWrap(6, ctx()));
+            }
+            TextView body = Ui.text(ctx(), reportText, 13.5f, Ui.INK, false);
+            card.addView(body, Ui.matchWrap(8, ctx()));
+            Button regen = Ui.primaryButton(ctx(), "重新生成");
+            regen.setOnClickListener(v -> generateReport());
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                    Ui.dp(ctx(), 120), ViewGroup.LayoutParams.WRAP_CONTENT);
+            blp.topMargin = Ui.dp(ctx(), 12);
+            regen.setLayoutParams(blp);
+            card.addView(regen);
+        } else {
+            if (!reportError.isEmpty()) {
+                card.addView(Ui.text(ctx(), reportError, 12, Ui.RED, false), Ui.matchWrap(6, ctx()));
+            }
+            card.addView(Ui.text(ctx(), "点一下生成: 本周亮点、需要注意的问题和下周建议, 由健康智能体按你的真实数据写成, 生成后本周内可直接查看。",
+                    13, Ui.SLATE, false), Ui.matchWrap(8, ctx()));
+            Button gen = Ui.primaryButton(ctx(), "生成本周周报");
+            gen.setOnClickListener(v -> generateReport());
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                    Ui.dp(ctx(), 150), ViewGroup.LayoutParams.WRAP_CONTENT);
+            blp.topMargin = Ui.dp(ctx(), 12);
+            gen.setLayoutParams(blp);
+            card.addView(gen);
+        }
+        return card;
+    }
+
+    /** 调智能体对话接口生成周报: message 为固定周报指令, context 为本周真实数据摘要 */
+    private void generateReport() {
+        if (reportLoading) return;
+        reportLoading = true;
+        reportError = "";
+        renderBody();
+        final WeekStats s = weekStats();
+        StringBuilder ctxSb = new StringBuilder();
+        ctxSb.append("本周 ").append(summary.optString("start")).append(" 至 ").append(summary.optString("end"));
+        ctxSb.append(": 累计步数 ").append(fmtInt(summary.optDouble("total_steps", 0)));
+        ctxSb.append(" (日均 ").append(fmtInt(summary.optDouble("average_steps", 0))).append(")");
+        ctxSb.append(", 累计消耗 ").append(fmtNum(summary.optDouble("total_calories", 0))).append(" 千卡");
+        ctxSb.append(", 运动 ").append(summary.optInt("exercise_count", 0)).append(" 次、")
+                .append(fmtNum(summary.optDouble("exercise_minutes", 0))).append(" 分钟");
+        if (!summary.isNull("average_sleep")) {
+            ctxSb.append(", 平均睡眠 ").append(fmtNum(summary.optDouble("average_sleep"))).append(" 小时");
+        }
+        ctxSb.append(", 步数达标 ").append(s.stepDays).append(" 天, 消耗达标 ").append(s.calDays).append(" 天");
+        if (s.weightChange != null) {
+            ctxSb.append(", 体重变化 ").append(fmtNum(s.weightChange)).append(" kg");
+        }
+        String prompt = "请为我生成本周健康周报, 只用下面数据, 不要编造数据之外的内容。"
+                + "结构分三段, 每段 2-3 条、每条不超过 30 字、口语化: "
+                + "🌟 本周亮点 / ⚠️ 需要注意 / 🎯 下周建议。";
+        api().agentChat(prompt, new JSONArray(), ctxSb.toString(), new ApiClient.Callback() {
+            @Override public void onOk(JSONObject data, int status) {
+                reportLoading = false;
+                String reply = data.optString("reply", "");
+                if (reply.isEmpty()) {
+                    reportText = fallbackReport(s);
+                    reportFromAi = false;
+                    reportError = "智能体这次没有给出回复, 已显示规则版小结";
+                } else {
+                    reportText = reply;
+                    reportFromAi = true;
+                    SharedPreferences prefs = ctx().getSharedPreferences("welltrack", Context.MODE_PRIVATE);
+                    prefs.edit().putString(reportKey, reply).apply();
+                }
+                renderBody();
+            }
+            @Override public void onError(String message) {
+                reportLoading = false;
+                reportText = fallbackReport(s);
+                reportFromAi = false;
+                reportError = "";
+                renderBody();
+            }
+        });
     }
 
     private LinearLayout insightRow(Insights.Insight ins) {
