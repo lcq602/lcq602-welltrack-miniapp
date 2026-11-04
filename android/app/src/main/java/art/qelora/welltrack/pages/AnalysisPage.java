@@ -28,6 +28,7 @@ import java.util.Set;
 
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.Insights;
+import art.qelora.welltrack.health.ShareCard;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
 
@@ -389,6 +390,37 @@ public class AnalysisPage extends BasePage {
         return s;
     }
 
+    /** v2.11 分享卡: 用本周真实统计组装 ShareCard.Stats, 保存到相册并分享 */
+    private void shareWeeklyCard() {
+        WeekStats s = weekStats();
+        Insights.Day day = new Insights.Day();
+        day.steps = (int) Math.round(summary.optDouble("average_steps", 0));
+        day.calories = (int) Math.round(summary.optDouble("average_calories", 0));
+        day.sleepHours = summary.isNull("average_sleep") ? 0 : summary.optDouble("average_sleep", 0);
+        long span = Math.max(1, epochDay(summary.optString("end")) - epochDay(summary.optString("start")) + 1);
+        day.workoutMinutes = (int) Math.round(summary.optDouble("exercise_minutes", 0) / span);
+        int score = Insights.score(day);
+        ShareCard.Stats st = new ShareCard.Stats();
+        st.dateRange = summary.optString("start") + " — " + summary.optString("end");
+        st.score = score;
+        st.scoreLabel = Insights.scoreLabel(score);
+        st.totalSteps = (long) Math.round(summary.optDouble("total_steps", 0));
+        st.avgSteps = (int) Math.round(summary.optDouble("average_steps", 0));
+        st.totalCalories = summary.optDouble("total_calories", 0);
+        st.stepDays = s.stepDays;
+        st.calDays = s.calDays;
+        st.workoutDays = s.workoutDays;
+        st.workoutMinutes = summary.optDouble("exercise_minutes", 0);
+        st.avgSleep = s.avgSleep;
+        st.weightChange = s.weightChange;
+        try {
+            String fileName = ShareCard.share(ctx(), st);
+            toast("分享卡已保存到相册: " + fileName);
+        } catch (Exception e) {
+            toast("分享卡生成失败: " + e.getMessage());
+        }
+    }
+
     /** AI 不可用时的规则版小结: 只用本周真实统计拼句子, 不编造 */
     private String fallbackReport(WeekStats s) {
         StringBuilder sb = new StringBuilder();
@@ -443,6 +475,15 @@ public class AnalysisPage extends BasePage {
         highlights.setBackground(Ui.roundRect(Ui.GREEN_SOFT, 10, ctx()));
         highlights.setPadding(Ui.dp(ctx(), 12), Ui.dp(ctx(), 9), Ui.dp(ctx(), 12), Ui.dp(ctx(), 9));
         card.addView(highlights, Ui.matchWrap(8, ctx()));
+
+        // v2.11 分享卡 (R9): 按本周真实数据画图片, 保存到相册并调系统分享面板
+        Button shareBtn = Ui.ghostButton(ctx(), "📤 生成分享卡 (保存到相册并分享)");
+        shareBtn.setOnClickListener(v -> shareWeeklyCard());
+        LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sblp.topMargin = Ui.dp(ctx(), 10);
+        shareBtn.setLayoutParams(sblp);
+        card.addView(shareBtn);
 
         if (reportLoading) {
             card.addView(Ui.text(ctx(), "智能体正在写本周周报…", 13, Ui.SLATE, false), Ui.matchWrap(10, ctx()));
