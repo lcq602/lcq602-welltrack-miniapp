@@ -30,8 +30,8 @@ import art.qelora.welltrack.ui.Ui;
 
 /**
  * 我的页 (对应小程序 pages/mine): 资料概览 (GET /api/v1/profile)、
- * 小米运动健康连接 (status / connect / verify / sync / connection DELETE)、
- * 以及接口地址显示与修改 (ApiClient 的 welltrack_api 配置)。
+ * 小米运动健康连接 (status / connect / verify / sync / connection DELETE)。
+ * 接口固定走 Cloudflare Worker, 本页不再提供接口地址配置。
  */
 public class MinePage extends BasePage {
     private JSONObject profile;
@@ -54,7 +54,6 @@ public class MinePage extends BasePage {
     private TextView baselineLink;
     private TextView miPill;
     private LinearLayout miBox;
-    private TextView apiCurrent;
 
     private EditText codeInput;
     private Button verifyBtn;
@@ -160,51 +159,7 @@ public class MinePage extends BasePage {
         mi.addView(miFoot, Ui.matchWrap(14, ctx()));
         content.addView(mi, Ui.matchWrap(14, ctx()));
 
-        buildApiCard();
-
         renderAll();
-    }
-
-    private void buildApiCard() {
-        LinearLayout card = Ui.card(ctx());
-        card.addView(Ui.text(ctx(), "SERVICE ENDPOINT", 10, Ui.MUTED, true));
-        card.addView(Ui.sectionTitle(ctx(), "接口地址"), Ui.matchWrap(3, ctx()));
-        apiCurrent = Ui.text(ctx(), api().getApiBase(), 12, Ui.SLATE, false);
-        apiCurrent.setTextIsSelectable(true);
-        card.addView(apiCurrent, Ui.matchWrap(8, ctx()));
-        final EditText input = Ui.input(ctx(), "如 https://qelora.art", InputType.TYPE_TEXT_VARIATION_URI);
-        input.setText(api().getApiBase());
-        card.addView(input, Ui.matchWrap(10, ctx()));
-        LinearLayout btnRow = Ui.row(ctx());
-        Button save = Ui.primaryButton(ctx(), "保存接口地址");
-        save.setOnClickListener(v -> {
-            String value = input.getText().toString().trim();
-            if (value.isEmpty()) value = ApiClient.API_DEFAULT;
-            while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
-            api().setApiBase(value);
-            input.setText(api().getApiBase());
-            apiCurrent.setText(api().getApiBase());
-            toast("接口地址已保存，将重新建立会话");
-            loadProfile();
-            loadMiHealth();
-        });
-        btnRow.addView(save, Ui.weight1());
-        Button reset = Ui.ghostButton(ctx(), "恢复默认");
-        LinearLayout.LayoutParams rlp = Ui.weight1();
-        rlp.leftMargin = Ui.dp(ctx(), 10);
-        reset.setOnClickListener(v -> {
-            api().setApiBase(ApiClient.API_DEFAULT);
-            input.setText(ApiClient.API_DEFAULT);
-            apiCurrent.setText(ApiClient.API_DEFAULT);
-            toast("已恢复默认接口地址");
-            loadProfile();
-            loadMiHealth();
-        });
-        btnRow.addView(reset, rlp);
-        card.addView(btnRow, Ui.matchWrap(12, ctx()));
-        card.addView(Ui.text(ctx(), "修改后会清除当前会话并用新地址重新连接后端。",
-                11, Ui.MUTED, false), Ui.matchWrap(8, ctx()));
-        content.addView(card, Ui.matchWrap(14, ctx()));
     }
 
     @Override

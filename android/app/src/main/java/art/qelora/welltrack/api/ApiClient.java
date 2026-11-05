@@ -20,14 +20,14 @@ import java.util.concurrent.Executors;
 
 /**
  * 与小程序 utils/api.js 等价的接口层:
- *  - 默认接口地址 https://qelora.art, 可在「我的」里改 (存 welltrack_api)
+ *  - 接口只走 Cloudflare Worker (主数据与健康智能体同一服务, 各自独立会话)
  *  - 首次请求自动用本地匿名会话 POST /api/v1/auth/local 换 token (存 welltrack_token)
  *  - 遇 401 自动清 token、重新建会话并重试一次
  */
 public class ApiClient {
-    public static final String API_DEFAULT = "https://qelora.art";
-    /** 健康智能体服务 (Cloudflare Worker, 与主后端是独立的一套会话) */
-    public static final String AGENT_BASE = "https://welltrack-api.sry602.workers.dev";
+    public static final String API_DEFAULT = "https://welltrack-api.sry602.workers.dev";
+    /** 健康智能体服务 (与主后端同一个 Cloudflare Worker, 独立的一套会话) */
+    public static final String AGENT_BASE = API_DEFAULT;
     private static final String AGENT_TOKEN_KEY = "welltrack_agent_token";
     private static ApiClient instance;
 
@@ -47,6 +47,11 @@ public class ApiClient {
 
     private ApiClient(Context ctx) {
         prefs = ctx.getSharedPreferences("welltrack", Context.MODE_PRIVATE);
+        // 一次性迁移: 清除旧后端的接口地址配置与会话, 全量切换到 Cloudflare Worker
+        if (!prefs.getBoolean("cf_backend_v1", false)) {
+            prefs.edit().remove("welltrack_api").remove("welltrack_token")
+                    .putBoolean("cf_backend_v1", true).apply();
+        }
     }
 
     public static synchronized ApiClient get(Context ctx) {
@@ -55,17 +60,7 @@ public class ApiClient {
     }
 
     public String getApiBase() {
-        String saved = prefs.getString("welltrack_api", "");
-        if (saved == null || saved.isEmpty()
-                || saved.startsWith("http://127.0.0.1") || saved.startsWith("http://localhost")) {
-            return API_DEFAULT;
-        }
-        return saved.replaceAll("/$", "");
-    }
-
-    public void setApiBase(String base) {
-        prefs.edit().putString("welltrack_api", base).apply();
-        prefs.edit().remove("welltrack_token").apply();
+        return API_DEFAULT;
     }
 
     public String getToken() { return prefs.getString("welltrack_token", ""); }
@@ -157,7 +152,7 @@ public class ApiClient {
         });
     }
 
-    /* ---------- 饮食记录 (主后端 /api/v1/diet, 与 Worker 契约一致) ---------- */
+    /* ---------- 饮食记录 (/api/v1/diet) ---------- */
 
     /** 拉取某日饮食记录: 返回 {date, entries:[...], total_kcal, count} */
     public void dietList(String date, Callback cb) {
@@ -169,7 +164,7 @@ public class ApiClient {
         request("/api/v1/diet", "POST", body, cb);
     }
 
-    /* ---------- 快捷饮水 (主后端 /api/v1/water, 与 Worker 契约一致) ---------- */
+    /* ---------- 快捷饮水 (/api/v1/water) ---------- */
 
     /** 快捷加水: body {record_date, amount_ml}, 返回 {water_ml, goal_ml, progress_pct} */
     public void waterAdd(String date, int amountMl, Callback cb) {
