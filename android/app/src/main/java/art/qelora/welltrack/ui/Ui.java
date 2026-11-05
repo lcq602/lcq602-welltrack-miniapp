@@ -261,6 +261,36 @@ public class Ui {
         return t;
     }
 
+    /** v3.0 快捷操作瓷砖: 大图标 + 标签, 整块可点 (首页快捷入口行) */
+    public static LinearLayout quickAction(Context c, String emoji, String label,
+                                           View.OnClickListener onClick) {
+        LinearLayout t = column(c);
+        t.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        t.setBackground(roundRect(SOFT, 18, c));
+        int pv = dp(c, 12);
+        t.setPadding(dp(c, 4), pv, dp(c, 4), pv);
+        TextView em = text(c, emoji, 24, INK, false);
+        em.setGravity(android.view.Gravity.CENTER);
+        t.addView(em);
+        TextView lb = text(c, label, 12, INK, true);
+        lb.setGravity(android.view.Gravity.CENTER);
+        t.addView(lb, matchWrap(6, c));
+        if (onClick != null) t.setOnClickListener(onClick);
+        return t;
+    }
+
+    /** v3.0 可选态切换片 (打卡面板的运动/时长选择): 选中 = 荧光绿底黑字 */
+    public static TextView toggleChip(Context c, String s, boolean selected,
+                                      View.OnClickListener onClick) {
+        TextView t = text(c, s, 13, selected ? ON_LIME : SLATE, true);
+        t.setGravity(android.view.Gravity.CENTER);
+        t.setBackground(roundRect(selected ? LIME : SOFT, 999, c));
+        int h = dp(c, 12), v = dp(c, 7);
+        t.setPadding(h, v, h, v);
+        if (onClick != null) t.setOnClickListener(onClick);
+        return t;
+    }
+
     /** 小胶囊标签 */
     public static TextView chip(Context c, String s, int fg, int bg) {
         TextView t = text(c, s, 11, fg, true);

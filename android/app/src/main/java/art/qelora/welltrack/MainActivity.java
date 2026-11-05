@@ -163,6 +163,13 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** v3.0 首页快捷入口: 跳到记录页并直接打开食物选择 (photo=false) 或拍照识别 (photo=true) */
+    public void goRecordsDiet(boolean photo) {
+        switchTab(2);
+        RecordsPage rp = (RecordsPage) tabPages[2];
+        rp.post(() -> { if (photo) rp.openPhotoSource(); else rp.openFoodPicker(); });
+    }
+
     /** 打开覆盖页 (目前是运动页), 对应小程序 wx.navigateTo */
     public void openExercise() {
         if (overlayPage != null) return;

@@ -885,6 +885,12 @@ public class RecordsPage extends BasePage {
     }
 
     /* ----- 选择食物: 搜索框 + 列表对话框 → 份量对话框 ----- */
+    /** v3.0 首页快捷入口: 直接打开食物选择 (配合 MainActivity.goRecordsDiet 使用) */
+    public void openFoodPicker() { showFoodPicker(); }
+
+    /** v3.0 首页快捷入口: 直接打开拍照识别来源选择 */
+    public void openPhotoSource() { showPhotoSource(); }
+
     private void showFoodPicker() {
         Context c = ctx();
         LinearLayout list = Ui.column(c);

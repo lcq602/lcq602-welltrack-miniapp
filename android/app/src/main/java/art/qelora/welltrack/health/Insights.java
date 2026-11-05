@@ -41,6 +41,95 @@ public class Insights {
         }
     }
 
+    /* ================= v3.0 多维评分 =================
+     * 旧版只有步数/消耗/运动/睡眠四项且不透明, 用户反馈"评分不好"。
+     * 新版五维分项、每项给出口径与一句话说明, 缺数据的维度不计分 (不惩罚),
+     * 总分按可用维度等比折算到 100。首页 Hero 展示总分环 + 分项条 + 最弱项提示。
+     */
+
+    public static final int WATER_GOAL_ML = 2000;
+    public static final int DIET_GOAL_KCAL = 2000;
+
+    /** 今日完整输入: 在 Day 基础上补饮水与饮食 (活动/运动/睡眠沿用 Day 字段) */
+    public static class DayFull extends Day {
+        public int waterMl;        // 今日饮水 ml
+        public int dietKcal = -1;  // 今日饮食摄入 kcal, -1 表示未记录
+        public int dietCount;      // 今日饮食条数
+    }
+
+    public static class Part {
+        public final String name;
+        public final int score;    // 本项得分 (四舍五入)
+        public final int max;      // 本项满分
+        public final boolean hasData;
+        public final String hint;  // 一句话口径说明
+        public Part(String name, int score, int max, boolean hasData, String hint) {
+            this.name = name; this.score = score; this.max = max;
+            this.hasData = hasData; this.hint = hint;
+        }
+    }
+
+    public static class ScoreResult {
+        public int total;                       // 0-100 (按可用维度折算)
+        public final List<Part> parts = new ArrayList<>();
+        public String weakHint = "";            // 最弱可用维度的一句话
+        public String strongHint = "";          // 最强可用维度的一句话
+    }
+
+    public static ScoreResult scoreFull(DayFull d) {
+        ScoreResult r = new ScoreResult();
+        // 活动 30: 步数 18 + 活动消耗 12
+        double act = Math.min(1, d.steps / (double) STEP_GOAL) * 18
+                + Math.min(1, d.calories / (double) CAL_GOAL) * 12;
+        boolean actHas = d.steps > 0 || d.calories > 0;
+        r.parts.add(new Part("活动", (int) Math.round(act), 30, actHas,
+                actHas ? ("步数 " + d.steps + " · 消耗 " + d.calories + " 千卡")
+                        : "暂无手环活动数据，不计分"));
+        // 运动 15: 今日运动分钟 / 30
+        double wo = Math.min(1, d.workoutMinutes / (double) WORKOUT_GOAL) * 15;
+        r.parts.add(new Part("运动", (int) Math.round(wo), 15, d.workoutMinutes > 0,
+                d.workoutMinutes > 0 ? ("今日运动 " + d.workoutMinutes + " 分钟")
+                        : "今天还没运动，去打卡补上"));
+        // 睡眠 20: 小时 / 8 (超过 8 按满分; 无数据不计分)
+        boolean slHas = d.sleepHours > 0;
+        double sl = slHas ? Math.min(1, d.sleepHours / SLEEP_GOAL) * 20 : 0;
+        r.parts.add(new Part("睡眠", (int) Math.round(sl), 20, slHas,
+                slHas ? ("昨晚 " + trim(d.sleepHours) + " 小时，目标 8 小时")
+                        : "暂无睡眠数据，不计分"));
+        // 饮水 15: ml / 2000
+        double wa = Math.min(1, d.waterMl / (double) WATER_GOAL_ML) * 15;
+        r.parts.add(new Part("饮水", (int) Math.round(wa), 15, d.waterMl > 0,
+                d.waterMl > 0 ? ("已喝 " + d.waterMl + " / " + WATER_GOAL_ML + " ml")
+                        : "今天还没记饮水"));
+        // 饮食 20: 已记录才计分; 按摄入与目标带 (85%~110%) 的接近程度
+        boolean diHas = d.dietKcal > 0;
+        double di = 0;
+        if (diHas) {
+            double ratio = d.dietKcal / (double) DIET_GOAL_KCAL;
+            double closeness;
+            if (ratio >= 0.85 && ratio <= 1.1) closeness = 1;
+            else if (ratio < 0.85) closeness = ratio / 0.85;
+            else closeness = Math.max(0, 1 - (ratio - 1.1) / 0.9);
+            di = closeness * 20;
+        }
+        r.parts.add(new Part("饮食", (int) Math.round(di), 20, diHas,
+                diHas ? ("已记 " + d.dietCount + " 项 · " + d.dietKcal + " 千卡")
+                        : "未记录饮食，不计分"));
+        int sum = 0, avail = 0;
+        Part weak = null, strong = null;
+        for (Part p : r.parts) {
+            if (!p.hasData) continue;
+            sum += p.score; avail += p.max;
+            double frac = p.max == 0 ? 0 : p.score / (double) p.max;
+            if (weak == null || frac < weak.score / (double) Math.max(1, weak.max)) weak = p;
+            if (strong == null || frac > strong.score / (double) Math.max(1, strong.max)) strong = p;
+        }
+        r.total = avail == 0 ? 0 : (int) Math.round(sum / (double) avail * 100);
+        if (weak != null) r.weakHint = weak.name + "：" + weak.hint;
+        if (strong != null) r.strongHint = strong.name + "：" + strong.hint;
+        return r;
+    }
+
     /** 综合健康分 0-100: 步数30 + 消耗30 + 运动20 + 睡眠20, 无睡眠数据时按其余项等比 */
     public static int score(Day d) {
         double s = Math.min(1, d.steps / (double) STEP_GOAL) * 30;

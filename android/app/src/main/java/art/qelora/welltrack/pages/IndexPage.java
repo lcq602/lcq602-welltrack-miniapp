@@ -3,6 +3,7 @@ package art.qelora.welltrack.pages;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Outline;
 import android.graphics.drawable.GradientDrawable;
@@ -44,13 +45,13 @@ import art.qelora.welltrack.health.Reminders;
 import art.qelora.welltrack.health.Streak;
 import art.qelora.welltrack.ui.BasePage;
 import art.qelora.welltrack.ui.Ui;
-import art.qelora.welltrack.ui.VitalityRings;
+import art.qelora.welltrack.ui.ScoreRing;
 
 /**
- * 首页 v2.2 (对应小程序 pages/index, 深色荧光绿风格):
- * 结构: 问候头 → 今日训练大卡 (AI 计划) → 三瓷砖 (饮食/有氧/身体数据) → 本周计划周条 →
- *       活力卡 (三环/健康分/达标文案) → 今日指标 2×2 → 健康洞察 → 体重卡 → 今日待办 → 7 天体重波动。
- * 未连接小米时活力区换成连接引导卡。计划数据经 PlanStore (与计划页共用缓存)。
+ * 首页 v3.0 (深色荧光绿风格): 问候头 → AI 今日评分 Hero (五维分项 + AI 点评) →
+ *       快捷操作 (拍照记餐/记食物/记体重/喝水) → 今日训练大卡 → 运动打卡 →
+ *       全部身体数据 → 小米手环活动 → 饮水 → 本周计划 → 打卡/洞察/趋势。
+ * 计划数据经 PlanStore (与计划页共用缓存)。
  * 数据: GET /api/v1/dashboard; 建档: POST /api/v1/profile; 同步: POST /api/v1/integrations/mihealth/sync。
  */
 public class IndexPage extends BasePage {
@@ -100,6 +101,19 @@ public class IndexPage extends BasePage {
     private boolean streakLoading = false;
 
     // v2.2 本周计划 (PlanStore): 训练大卡 / 三瓷砖 / 周条 / 今日摘要共用
+    // v3.0 首页改版: 多维评分 / AI 点评 / 今日运动打卡
+    private final Insights.DayFull todayFull = new Insights.DayFull();
+    private Insights.ScoreResult scoreResult;
+    private String aiVerdict = "";
+    private boolean aiVerdictLoading = false;
+    private int todayExerciseMinutes = 0;
+    private boolean exLoading = false;
+    private int checkinSportIdx = 0;
+    private int checkinMinutes = 30;
+    private boolean checkinSaving = false;
+    private static final String[] CHECKIN_SPORTS = {"跑步", "快走", "骑行", "游泳", "瑜伽", "力量训练"};
+    private static final int[] CHECKIN_MINS = {15, 30, 45, 60};
+
     private JSONObject homePlan;         // plan 对象本身, 未就绪为 null
     private String homePlanSig = "";     // week_start+今日focus+source 签名, 防重复渲染
     private boolean homePlanRequested = false;
@@ -171,6 +185,8 @@ public class IndexPage extends BasePage {
                 loading = false;
                 homePlanRequested = false; // 计划走 PlanStore 缓存复检, 签名不变则不重复渲染
                 render();
+                loadTodayExercises();
+                loadAiVerdict();
             }
 
             @Override public void onError(String message) {
@@ -293,6 +309,82 @@ public class IndexPage extends BasePage {
         todos.clear();
         JSONArray td = data.optJSONArray("todos");
         if (td != null) for (int i = 0; i < td.length(); i++) todos.add(td.optString(i, ""));
+        buildScore();
+    }
+
+    /* v3.0: 组装多维评分输入 (活动/运动/睡眠取手环今日值, 运动分钟与今日打卡取大者) */
+    private void buildScore() {
+        todayFull.steps = todayDay.steps;
+        todayFull.calories = todayDay.calories;
+        todayFull.sleepHours = todayDay.sleepHours;
+        todayFull.workoutMinutes = Math.max(todayDay.workoutMinutes, todayExerciseMinutes);
+        todayFull.waterMl = todayWaterMl();
+        JSONObject dt = data != null ? data.optJSONObject("diet_today") : null;
+        if (dt != null && dt.optInt("count", 0) > 0) {
+            todayFull.dietKcal = (int) Math.round(dt.optDouble("total_kcal", 0));
+            todayFull.dietCount = dt.optInt("count", 0);
+        } else {
+            todayFull.dietKcal = -1;
+            todayFull.dietCount = 0;
+        }
+        scoreResult = Insights.scoreFull(todayFull);
+    }
+
+    /* v3.0: 拉今日运动记录 (打卡状态与运动分钟的真实来源, 数组响应走文本通道) */
+    private void loadTodayExercises() {
+        if (exLoading) return;
+        exLoading = true;
+        final String today = todayString();
+        api().requestText("/api/v1/exercises?start=" + today + "&end=" + today,
+                new ApiClient.RawCallback() {
+                    @Override public void onOk(String text, int status) {
+                        exLoading = false;
+                        try {
+                            JSONArray arr = new JSONArray(text);
+                            int sum = 0;
+                            for (int i = 0; i < arr.length(); i++) {
+                                JSONObject e = arr.optJSONObject(i);
+                                if (e != null) sum += e.optInt("duration_minutes", 0);
+                            }
+                            if (sum != todayExerciseMinutes) {
+                                todayExerciseMinutes = sum;
+                                buildScore();
+                                if (data != null && configured) render();
+                            }
+                        } catch (Exception ignored) {}
+                    }
+
+                    @Override public void onError(String message) { exLoading = false; }
+                });
+    }
+
+    /* v3.0: AI 点评 (智能体一句话点评, 按日缓存到本机; 失败静默, Hero 用短板提示兜底) */
+    private void loadAiVerdict() {
+        if (aiVerdictLoading || scoreResult == null || !configured) return;
+        final SharedPreferences prefs = ctx().getSharedPreferences("welltrack", Context.MODE_PRIVATE);
+        final String key = "ai_verdict_" + todayString();
+        String cached = prefs.getString(key, "");
+        if (cached != null && !cached.isEmpty()) { aiVerdict = cached; return; }
+        aiVerdictLoading = true;
+        StringBuilder sb = new StringBuilder();
+        sb.append("今日健康分 ").append(scoreResult.total).append(" 分。");
+        for (Insights.Part p : scoreResult.parts) sb.append(p.name).append("：").append(p.hint).append("；");
+        sb.append("本周已运动 ").append(weekStats.workoutDays).append(" 天。");
+        api().agentChat("请用一句话点评我今天的健康表现（30 字以内），再给一个今晚就能落实的小建议（30 字以内），合并成一句话回复，不要分点。",
+                new JSONArray(), sb.toString(), new ApiClient.Callback() {
+                    @Override public void onOk(JSONObject res, int status) {
+                        aiVerdictLoading = false;
+                        String reply = res.optString("reply", "").trim();
+                        if (!reply.isEmpty()) {
+                            if (reply.length() > 110) reply = reply.substring(0, 110);
+                            aiVerdict = reply;
+                            prefs.edit().putString(key, reply).apply();
+                            if (data != null && configured) render();
+                        }
+                    }
+
+                    @Override public void onError(String message) { aiVerdictLoading = false; }
+                });
     }
 
     private void computeWeekStats(List<String> windowDates, Map<String, JSONObject> recordMap) {
@@ -554,35 +646,18 @@ public class IndexPage extends BasePage {
         // v2.12 记录提醒条: 当天未记录体重且提醒开启、且今天未点过「不再提醒」时出现
         LinearLayout reminder = renderWeightReminderBanner();
         if (reminder != null) body.addView(reminder, Ui.matchWrap(14, ctx()));
-        // 2) 今日训练大卡 (AI 计划驱动, 参考图照片大卡)
-        body.addView(renderTrainingCard(), Ui.matchWrap(14, ctx()));
-        // 3) 三瓷砖: 饮食记录 / 有氧运动 / 身体数据
-        body.addView(renderTopTiles(), Ui.matchWrap(12, ctx()));
-        // 3.5) 今日饮水卡: 进度环 + 一键 +250ml / 自定义 (POST /api/v1/water)
+        // v3.0 首页信息流: 评分 Hero → 快捷操作 → 训练 → 打卡 → 全部身体数据 → 手环 → 饮水 → 计划/打卡/洞察/趋势
+        body.addView(renderScoreHero(), Ui.matchWrap(14, ctx()));
+        body.addView(renderQuickActions(), Ui.matchWrap(12, ctx()));
+        body.addView(renderTrainingCard(), Ui.matchWrap(12, ctx()));
+        body.addView(renderCheckinCard(), Ui.matchWrap(12, ctx()));
+        body.addView(renderBodyDataCard(), Ui.matchWrap(12, ctx()));
+        body.addView(renderBandCard(), Ui.matchWrap(12, ctx()));
         body.addView(renderWaterCard(), Ui.matchWrap(12, ctx()));
-        // 4) 本周计划: 周条 + 今日摘要
         body.addView(renderWeekStrip(), Ui.matchWrap(18, ctx()));
-        // 4.5) v2.6 连续打卡卡: 火焰天数 + 本周记录点 + 下一徽章提示
         if (streakResult != null) body.addView(renderStreakCard(), Ui.matchWrap(18, ctx()));
-
-        if (miConnected) {
-            // 3) 活力卡
-            body.addView(renderVitalityCard(), Ui.matchWrap(18, ctx()));
-            // 4) 今日指标 2×2
-            body.addView(renderMetricTiles(), Ui.matchWrap(18, ctx()));
-            // 5) 健康洞察
-            LinearLayout insights = renderInsightsCard();
-            if (insights != null) body.addView(insights, Ui.matchWrap(18, ctx()));
-        } else {
-            // 未连接小米: 连接引导卡替代活力区
-            body.addView(renderConnectCard(), Ui.matchWrap(18, ctx()));
-        }
-
-        // 6) 体重卡
-        body.addView(renderWeightCard(), Ui.matchWrap(18, ctx()));
-        // 7) 今日待办
-        body.addView(renderActionsCard(), Ui.matchWrap(18, ctx()));
-        // 8) 7 天体重波动
+        LinearLayout insights = renderInsightsCard();
+        if (insights != null) body.addView(insights, Ui.matchWrap(18, ctx()));
         body.addView(renderTrendCard(), Ui.matchWrap(18, ctx()));
 
         TextView dis = Ui.text(ctx(), "BMI 与数据记录用于健康自我管理，不构成医疗诊断或特定减重速度承诺。", 11, Ui.MUTED, false);
@@ -687,41 +762,6 @@ public class IndexPage extends BasePage {
 
     /* 三瓷砖: 饮食记录 (今日摄入热量, dashboard.diet_today; 缺失时回退今日饮水) /
        有氧运动 (今日运动分钟) / 身体数据 (最新体重, 点击去记录页) */
-    private LinearLayout renderTopTiles() {
-        Context c = ctx();
-        LinearLayout row = Ui.row(c);
-        row.setGravity(Gravity.TOP);
-        JSONObject todayRec = recordByDateMap.get(todayString());
-        JSONObject dietToday = data != null ? data.optJSONObject("diet_today") : null;
-        if (dietToday != null) {
-            double totalKcal = dietToday.optDouble("total_kcal", 0);
-            int dietCount = dietToday.optInt("count", 0);
-            row.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "🍽️", "饮食记录",
-                    fmt(totalKcal) + " kcal", "今日 " + dietCount + " 项", -1), tile3Lp(true, false));
-        } else {
-            Double water = todayRec != null ? num(todayRec, "water_ml") : null;
-            row.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "🍽️", "饮食记录",
-                    water != null ? fmt(water) : "—",
-                    water != null ? "今日饮水 · ml" : "今日未记录", -1), tile3Lp(true, false));
-        }
-        Double wm = todayRec != null ? num(todayRec, "workout_minutes") : null;
-        int mins = wm != null ? (int) Math.round(wm) : todayDay.workoutMinutes;
-        row.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "🏃", "有氧运动",
-                String.valueOf(mins), "今日运动 · 分钟", -1), tile3Lp(false, false));
-        LinearLayout bodyTile = Ui.metricTile(c, Ui.LIME, Ui.SOFT, "⚖️", "身体数据",
-                fmt(num(data, "current_weight")), "kg · 记录今天", -1);
-        bodyTile.setOnClickListener(v -> activity().switchTab(2));
-        row.addView(bodyTile, tile3Lp(false, true));
-        return row;
-    }
-
-    private LinearLayout.LayoutParams tile3Lp(boolean first, boolean last) {
-        LinearLayout.LayoutParams lp = Ui.weight1();
-        if (!first) lp.leftMargin = Ui.dp(ctx(), 4);
-        if (!last) lp.rightMargin = Ui.dp(ctx(), 4);
-        return lp;
-    }
-
     /* v2.12 体重提醒条: 仅当今天记录里没有体重时出现, 温和提醒、不遮挡、不重复打扰。
        判定口径: dashboard 记录中今天那条的 weight 为空 (哪怕今天已有饮水/运动记录也算未称体重)。
        点「去记录」跳记录页; 点「今日不再提醒」后当天不再出现 (仅存本机)。 */
@@ -970,128 +1010,8 @@ public class IndexPage extends BasePage {
     }
 
     /* 活力卡: 三环 + 今日健康分 + 三项图例 + 消耗达标横条; 右上角保留小米同步按钮 */
-    private LinearLayout renderVitalityCard() {
-        LinearLayout card = Ui.card(ctx());
-        LinearLayout head = Ui.row(ctx());
-        LinearLayout titles = Ui.column(ctx());
-        titles.addView(Ui.sectionTitle(ctx(), "小米运动健康 · 今日活力"));
-        String synced = mihealth.optString("last_synced_at", "");
-        String sub = (synced != null && !synced.isEmpty() && !"null".equals(synced))
-                ? "数据已同步于 " + synced : "今日活力数据已就绪";
-        titles.addView(Ui.text(ctx(), sub, 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
-        head.addView(titles, Ui.weight1());
-        android.widget.Button refresh = Ui.ghostButton(ctx(), syncing ? "同步中…" : "⚡ 同步");
-        refresh.setEnabled(!syncing);
-        refresh.setOnClickListener(v -> syncMiHealth());
-        head.addView(refresh);
-        card.addView(head);
-
-        LinearLayout main = Ui.row(ctx());
-        VitalityRings rings = new VitalityRings(ctx());
-        rings.setData(todayDay.steps / (double) Insights.STEP_GOAL,
-                todayDay.calories / (double) Insights.CAL_GOAL,
-                todayDay.workoutMinutes / (double) Insights.WORKOUT_GOAL);
-        int rsz = Ui.dp(ctx(), 148);
-        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(rsz, rsz);
-        rlp.rightMargin = Ui.dp(ctx(), 14);
-        main.addView(rings, rlp);
-
-        LinearLayout right = Ui.column(ctx());
-        right.addView(Ui.label(ctx(), "今日健康分"));
-        LinearLayout scoreRow = Ui.row(ctx());
-        int score = Insights.score(todayDay);
-        scoreRow.addView(Ui.text(ctx(), String.valueOf(score), 34, Ui.INK, true));
-        TextView scoreUnit = Ui.text(ctx(), " 分", 13, Ui.SLATE, false);
-        scoreRow.addView(scoreUnit);
-        TextView labelChip = Ui.chip(ctx(), Insights.scoreLabel(score), Ui.PRIMARY_DARK, Ui.GREEN_SOFT);
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        clp.leftMargin = Ui.dp(ctx(), 8);
-        scoreRow.addView(labelChip, clp);
-        right.addView(scoreRow, Ui.matchWrap(2, ctx()));
-        right.addView(legendRow(Ui.PRIMARY, "步数",
-                fmt((double) todayDay.steps) + " / " + Insights.STEP_GOAL + " 步"), Ui.matchWrap(10, ctx()));
-        right.addView(legendRow(Ui.CAL, "消耗",
-                todayDay.calories + " / " + Insights.CAL_GOAL + " 千卡"), Ui.matchWrap(6, ctx()));
-        right.addView(legendRow(Ui.MOVE, "运动",
-                todayDay.workoutMinutes + " / " + Insights.WORKOUT_GOAL + " 分钟"), Ui.matchWrap(6, ctx()));
-        main.addView(right, Ui.weight1());
-        card.addView(main, Ui.matchWrap(14, ctx()));
-
-        boolean reached = todayDay.calories >= Insights.CAL_GOAL;
-        LinearLayout hint = Ui.row(ctx());
-        hint.setBackground(Ui.roundRect(reached ? Ui.GREEN_SOFT : Ui.CAL_SOFT, 10, ctx()));
-        int p = Ui.dp(ctx(), 10);
-        hint.setPadding(p, p, p, p);
-        TextView ht = Ui.text(ctx(), (reached ? "🔥 " : "🎯 ") + Insights.calorieHint(todayDay.calories),
-                13, reached ? Ui.PRIMARY_DARK : Ui.CAL_TEXT, true);
-        hint.addView(ht, Ui.weight1());
-        card.addView(hint, Ui.matchWrap(14, ctx()));
-        return card;
-    }
-
-    private LinearLayout legendRow(int color, String name, String value) {
-        LinearLayout row = Ui.row(ctx());
-        View dot = new View(ctx());
-        GradientDrawable dd = new GradientDrawable();
-        dd.setShape(GradientDrawable.OVAL);
-        dd.setColor(color);
-        dot.setBackground(dd);
-        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(Ui.dp(ctx(), 8), Ui.dp(ctx(), 8));
-        dl.rightMargin = Ui.dp(ctx(), 6);
-        row.addView(dot, dl);
-        TextView n = Ui.text(ctx(), name, 12, Ui.SLATE, false);
-        row.addView(n, Ui.weight1());
-        row.addView(Ui.text(ctx(), value, 12, Ui.INK, true));
-        return row;
-    }
-
     /* 未连接小米: 图片横幅 + 引导文案 + 连接按钮 (跳我的页) */
-    private LinearLayout renderConnectCard() {
-        LinearLayout card = Ui.card(ctx());
-        card.addView(Ui.bannerImage(ctx(), R.drawable.img_connect, 150, 24));
-        card.addView(Ui.sectionTitle(ctx(), "连接小米运动健康，解锁活力数据"), Ui.matchWrap(12, ctx()));
-        card.addView(Ui.text(ctx(), "同步手环/手表的步数、消耗、睡眠与运动数据，首页会自动生成健康分、达标提醒和锻炼建议。",
-                13, Ui.SLATE, false), Ui.matchWrap(6, ctx()));
-        android.widget.Button go = Ui.primaryButton(ctx(), "去连接小米运动健康");
-        go.setOnClickListener(v -> activity().switchTab(4));
-        card.addView(go, Ui.matchWrap(12, ctx()));
-        return card;
-    }
-
     /* 今日指标 2×2: 步数/消耗/睡眠/运动, 每块回答「达标没、差多少」 */
-    private LinearLayout renderMetricTiles() {
-        LinearLayout col = Ui.column(ctx());
-        LinearLayout row1 = Ui.row(ctx());
-        String stepSub = todayDay.steps >= Insights.STEP_GOAL ? "已达标 🎉"
-                : "还差 " + fmt((double) (Insights.STEP_GOAL - todayDay.steps)) + " 步";
-        row1.addView(Ui.metricTile(ctx(), Ui.PRIMARY, Ui.GREEN_SOFT, "👟", "步数",
-                fmt((double) todayDay.steps), stepSub,
-                todayDay.steps / (double) Insights.STEP_GOAL), tileLp(true));
-        String calSub = todayDay.calories >= Insights.CAL_GOAL ? "已达标 🎉"
-                : "还差 " + (Insights.CAL_GOAL - todayDay.calories) + " 千卡";
-        row1.addView(Ui.metricTile(ctx(), Ui.CAL, Ui.CAL_SOFT, "🔥", "活动消耗 · 千卡",
-                String.valueOf(todayDay.calories), calSub,
-                todayDay.calories / (double) Insights.CAL_GOAL), tileLp(false));
-        col.addView(row1);
-
-        LinearLayout row2 = Ui.row(ctx());
-        Double sleep = num(miToday, "sleep_hours");
-        String sleepVal = sleep != null ? fmt(sleep) + " 小时" : "--";
-        String sleepSub = sleep == null ? "手环自动监测"
-                : (sleep >= 7 ? "作息充足" : "建议睡满 8 小时");
-        row2.addView(Ui.metricTile(ctx(), Ui.SLEEP, Ui.SLEEP_SOFT, "🌙", "昨夜睡眠",
-                sleepVal, sleepSub, sleep != null ? sleep / Insights.SLEEP_GOAL : -1), tileLp(true));
-        String woSub = todayDay.workoutMinutes >= Insights.WORKOUT_GOAL ? "今日达标 🎉"
-                : "还差 " + (Insights.WORKOUT_GOAL - todayDay.workoutMinutes) + " 分钟";
-        row2.addView(Ui.metricTile(ctx(), Ui.MOVE, Ui.MOVE_SOFT, "⏱️", "运动 · 分钟",
-                String.valueOf(todayDay.workoutMinutes), woSub,
-                todayDay.workoutMinutes / (double) Insights.WORKOUT_GOAL), tileLp(false));
-        LinearLayout.LayoutParams r2 = Ui.matchWrap(10, ctx());
-        col.addView(row2, r2);
-        return col;
-    }
-
     private LinearLayout.LayoutParams tileLp(boolean left) {
         LinearLayout.LayoutParams lp = Ui.weight1();
         if (left) lp.rightMargin = Ui.dp(ctx(), 5); else lp.leftMargin = Ui.dp(ctx(), 5);
@@ -1131,100 +1051,7 @@ public class IndexPage extends BasePage {
     }
 
     /* 体重卡: 当前体重 + 较昨日 + BMI + 目标进度条 + 记体重入口 */
-    private LinearLayout renderWeightCard() {
-        LinearLayout card = Ui.card(ctx());
-        LinearLayout top = Ui.row(ctx());
-        LinearLayout left = Ui.column(ctx());
-        left.addView(Ui.label(ctx(), "当前体重 · " + goalLabelText));
-        boolean fromMi = "mihealth".equals(data.optString("current_weight_source", ""));
-        left.addView(Ui.text(ctx(), fromMi ? "数据源自小米运动健康同步" : "持续记录，见证身体点滴变化",
-                11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
-        top.addView(left, Ui.weight1());
-        TextView goalPill = pill("目标 " + fmt(num(data, "target_weight")) + " kg"
-                + (remainingWeight.isEmpty() ? "" : " · " + remainingWeight),
-                Ui.GREEN_SOFT, Ui.PRIMARY_DARK);
-        top.addView(goalPill);
-        card.addView(top);
-
-        LinearLayout wRow = Ui.row(ctx());
-        wRow.addView(Ui.text(ctx(), fmt(num(data, "current_weight")), 34, Ui.INK, true));
-        wRow.addView(Ui.text(ctx(), " kg", 16, Ui.SLATE, false));
-        if (!diffLabel.isEmpty()) {
-            TextView dp2 = pill(diffLabel, Ui.BLUE_SOFT, Color.parseColor("#60a5fa"));
-            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            dl.leftMargin = Ui.dp(ctx(), 8);
-            wRow.addView(dp2, dl);
-        }
-        Double bmi = num(data, "bmi");
-        if (bmi != null && bmi > 0) {
-            TextView bp = pill("BMI " + fmt(bmi) + " · " + bmiStatus, pillBg(bmiPillKind), pillFg(bmiPillKind));
-            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            bl.leftMargin = Ui.dp(ctx(), 8);
-            wRow.addView(bp, bl);
-        }
-        card.addView(wRow, Ui.matchWrap(10, ctx()));
-
-        if (showGoalProgress) {
-            FrameLayout bar = Ui.progressBar(ctx(), goalProgressVal / 100.0, Ui.PRIMARY, 8);
-            LinearLayout.LayoutParams blp = (LinearLayout.LayoutParams) bar.getLayoutParams();
-            blp.topMargin = Ui.dp(ctx(), 12);
-            bar.setLayoutParams(blp);
-            card.addView(bar);
-            LinearLayout foot = Ui.row(ctx());
-            TextView fl = Ui.text(ctx(), progressLabel, 12, Ui.MUTED, false);
-            foot.addView(fl, Ui.weight1());
-            foot.addView(Ui.text(ctx(), goalProgressVal + "%", 12, Ui.PRIMARY, true));
-            card.addView(foot, Ui.matchWrap(6, ctx()));
-        }
-
-        android.widget.Button record = Ui.primaryButton(ctx(), "记体重");
-        record.setOnClickListener(v -> activity().switchTab(2));
-        card.addView(record, Ui.matchWrap(14, ctx()));
-        return card;
-    }
-
     /* 今日待办 (保留原 todos 逻辑与两个入口) */
-    private LinearLayout renderActionsCard() {
-        LinearLayout card = Ui.card(ctx());
-        LinearLayout head = Ui.row(ctx());
-        LinearLayout titles = Ui.column(ctx());
-        titles.addView(Ui.sectionTitle(ctx(), "今天，照顾好自己"));
-        titles.addView(Ui.text(ctx(), "小行动比完美计划更重要", 11, Ui.MUTED, false), Ui.matchWrap(2, ctx()));
-        head.addView(titles, Ui.weight1());
-        head.addView(pill(todos.size() + " 项行动", Ui.GREEN_SOFT, Ui.PRIMARY_DARK));
-        card.addView(head);
-        for (String todo : todos) {
-            LinearLayout row = Ui.row(ctx());
-            TextView check = Ui.text(ctx(), "✓", 11, Ui.PRIMARY, true);
-            check.setGravity(Gravity.CENTER);
-            GradientDrawable circ = new GradientDrawable();
-            circ.setShape(GradientDrawable.OVAL);
-            circ.setColor(Ui.GREEN_SOFT);
-            check.setBackground(circ);
-            int sz = Ui.dp(ctx(), 22);
-            LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(sz, sz);
-            cl.rightMargin = Ui.dp(ctx(), 8);
-            row.addView(check, cl);
-            TextView tx = Ui.text(ctx(), todo, 13, Ui.INK, false);
-            row.addView(tx, Ui.weight1());
-            row.addView(Ui.text(ctx(), "已规划", 11, Ui.MUTED, false));
-            card.addView(row, Ui.matchWrap(10, ctx()));
-        }
-        LinearLayout btnRow = Ui.row(ctx());
-        android.widget.Button main = Ui.primaryButton(ctx(), "＋ 记录今天");
-        main.setOnClickListener(v -> activity().switchTab(2));
-        LinearLayout.LayoutParams bl = Ui.weight1(); bl.rightMargin = Ui.dp(ctx(), 6);
-        btnRow.addView(main, bl);
-        android.widget.Button sub = Ui.ghostButton(ctx(), "⚡ 记一笔运动");
-        sub.setOnClickListener(v -> activity().openExercise());
-        LinearLayout.LayoutParams br = Ui.weight1(); br.leftMargin = Ui.dp(ctx(), 6);
-        btnRow.addView(sub, br);
-        card.addView(btnRow, Ui.matchWrap(14, ctx()));
-        return card;
-    }
-
     /* 7 天体重波动 (保留原柱状实现, 标题换 sectionHeader 样式) */
     private LinearLayout renderTrendCard() {
         LinearLayout card = Ui.card(ctx());
@@ -1262,6 +1089,309 @@ public class IndexPage extends BasePage {
             chart.addView(col, Ui.weight1());
         }
         card.addView(chart, Ui.matchWrap(12, ctx()));
+        return card;
+    }
+
+    /* ================= v3.0 新增区块 ================= */
+
+    private int partColor(String name) {
+        switch (name) {
+            case "活动": return Ui.LIME;
+            case "运动": return Ui.MOVE;
+            case "睡眠": return Ui.SLEEP;
+            case "饮水": return Color.parseColor("#4db2ff");
+            default: return Ui.CAL;
+        }
+    }
+
+    /* AI 今日评分 Hero: 大环总分 + 状态标签 + 强弱项 + 五维分项条 + AI 点评 */
+    private LinearLayout renderScoreHero() {
+        Context c = ctx();
+        LinearLayout card = Ui.card(c);
+        LinearLayout head = Ui.row(c);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(Ui.text(c, "✦ AI 今日评分", 13, Ui.LIME, true), Ui.weight1());
+        head.addView(Ui.chip(c, miConnected ? "数据来自小米手环" : "基于今日记录", Ui.SLATE, Ui.SOFT));
+        card.addView(head);
+
+        int total = scoreResult != null ? scoreResult.total : 0;
+        int ringColor = total >= 65 ? Ui.LIME : total >= 40 ? Ui.AMBER_TEXT : Ui.CAL;
+        LinearLayout main = Ui.row(c);
+        main.setGravity(Gravity.CENTER_VERTICAL);
+        FrameLayout ringBox = new FrameLayout(c);
+        int rsz = Ui.dp(c, 126);
+        ScoreRing ring = new ScoreRing(c);
+        ring.setScore(total, ringColor);
+        ringBox.addView(ring, new FrameLayout.LayoutParams(rsz, rsz));
+        LinearLayout center = Ui.column(c);
+        center.setGravity(Gravity.CENTER_HORIZONTAL);
+        TextView numTv = Ui.text(c, String.valueOf(total), 38, Ui.INK, true);
+        numTv.setGravity(Gravity.CENTER);
+        center.addView(numTv);
+        TextView unitTv = Ui.text(c, "今日健康分", 11, Ui.MUTED, false);
+        unitTv.setGravity(Gravity.CENTER);
+        center.addView(unitTv);
+        FrameLayout.LayoutParams clp2 = new FrameLayout.LayoutParams(rsz, rsz);
+        clp2.gravity = Gravity.CENTER;
+        ringBox.addView(center, clp2);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(rsz, rsz);
+        rlp.rightMargin = Ui.dp(c, 14);
+        main.addView(ringBox, rlp);
+
+        LinearLayout right = Ui.column(c);
+        right.addView(Ui.text(c, Insights.scoreLabel(total), 20, Ui.INK, true));
+        if (scoreResult != null && !scoreResult.strongHint.isEmpty()) {
+            right.addView(Ui.text(c, "👍 " + scoreResult.strongHint, 12, Ui.SLATE, false), Ui.matchWrap(6, c));
+        }
+        if (scoreResult != null && !scoreResult.weakHint.isEmpty()) {
+            right.addView(Ui.text(c, "📌 待提升 · " + scoreResult.weakHint, 12, Ui.SLATE, false), Ui.matchWrap(4, c));
+        }
+        Button ask = Ui.ghostButton(c, "💬 问 AI 教练");
+        ask.setOnClickListener(v -> activity().openAgent());
+        right.addView(ask, Ui.matchWrap(10, c));
+        main.addView(right, Ui.weight1());
+        card.addView(main, Ui.matchWrap(14, c));
+
+        if (scoreResult != null) {
+            for (Insights.Part p : scoreResult.parts) {
+                LinearLayout row = Ui.row(c);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                TextView nm = Ui.text(c, p.name, 12, Ui.SLATE, true);
+                LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(Ui.dp(c, 34), ViewGroup.LayoutParams.WRAP_CONTENT);
+                row.addView(nm, nlp);
+                FrameLayout bar = Ui.progressBar(c, p.hasData ? p.score / (double) Math.max(1, p.max) : 0,
+                        partColor(p.name), 6);
+                row.addView(bar, Ui.weight1());
+                TextView sc = Ui.text(c, p.hasData ? (p.score + "/" + p.max) : "无数据",
+                        11, p.hasData ? Ui.INK : Ui.MUTED, true);
+                sc.setGravity(Gravity.RIGHT);
+                LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(Ui.dp(c, 46), ViewGroup.LayoutParams.WRAP_CONTENT);
+                slp.leftMargin = Ui.dp(c, 8);
+                row.addView(sc, slp);
+                card.addView(row, Ui.matchWrap(7, c));
+            }
+        }
+
+        if (!aiVerdict.isEmpty()) {
+            LinearLayout box = Ui.row(c);
+            box.setBackground(Ui.roundRect(Ui.GREEN_SOFT, 12, c));
+            int p = Ui.dp(c, 10);
+            box.setPadding(p, p, p, p);
+            box.addView(Ui.text(c, "🤖 " + aiVerdict, 13, Ui.INK, false), Ui.weight1());
+            card.addView(box, Ui.matchWrap(12, c));
+        } else if (aiVerdictLoading) {
+            card.addView(Ui.text(c, "🤖 AI 正在点评今天…", 12, Ui.MUTED, false), Ui.matchWrap(12, c));
+        }
+        return card;
+    }
+
+    /* 快捷操作: 拍照记餐 / 记录食物 / 记体重 / 喝水 +250 */
+    private LinearLayout renderQuickActions() {
+        Context c = ctx();
+        LinearLayout row = Ui.row(c);
+        row.addView(Ui.quickAction(c, "📸", "拍照记餐", v -> activity().goRecordsDiet(true)), tile4Lp(0));
+        row.addView(Ui.quickAction(c, "🍽️", "记录食物", v -> activity().goRecordsDiet(false)), tile4Lp(1));
+        row.addView(Ui.quickAction(c, "⚖️", "记体重", v -> activity().switchTab(2)), tile4Lp(2));
+        row.addView(Ui.quickAction(c, "💧", "喝水+250", v -> addWater(250)), tile4Lp(3));
+        return row;
+    }
+
+    private LinearLayout.LayoutParams tile4Lp(int idx) {
+        LinearLayout.LayoutParams lp = Ui.weight1();
+        if (idx > 0) lp.leftMargin = Ui.dp(ctx(), 4);
+        if (idx < 3) lp.rightMargin = Ui.dp(ctx(), 4);
+        return lp;
+    }
+
+    /* 运动打卡: 选运动 + 选时长 + 一键打卡 (POST /api/v1/exercises), 状态取今日真实记录 */
+    private LinearLayout renderCheckinCard() {
+        Context c = ctx();
+        LinearLayout card = Ui.card(c);
+        LinearLayout head = Ui.row(c);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = Ui.column(c);
+        titles.addView(Ui.sectionTitle(c, "运动打卡"));
+        titles.addView(Ui.text(c, todayExerciseMinutes > 0
+                        ? "今天已运动 " + todayExerciseMinutes + " 分钟，继续保持"
+                        : "选个运动，点一下就打卡", 12, Ui.MUTED, false), Ui.matchWrap(2, c));
+        head.addView(titles, Ui.weight1());
+        head.addView(todayExerciseMinutes > 0
+                ? Ui.chip(c, "✓ 已打卡", Ui.ON_LIME, Ui.LIME)
+                : Ui.chip(c, "未打卡", Ui.SLATE, Ui.SOFT));
+        card.addView(head);
+        for (int r = 0; r < 2; r++) {
+            LinearLayout row = Ui.row(c);
+            for (int i = r * 3; i < r * 3 + 3; i++) {
+                final int idx = i;
+                TextView chipTv = Ui.toggleChip(c, CHECKIN_SPORTS[idx], idx == checkinSportIdx,
+                        v -> { checkinSportIdx = idx; render(); });
+                LinearLayout.LayoutParams lp = Ui.weight1();
+                if (i % 3 > 0) lp.leftMargin = Ui.dp(c, 8);
+                row.addView(chipTv, lp);
+            }
+            card.addView(row, Ui.matchWrap(r == 0 ? 12 : 8, c));
+        }
+        LinearLayout drow = Ui.row(c);
+        for (int i = 0; i < CHECKIN_MINS.length; i++) {
+            final int m = CHECKIN_MINS[i];
+            TextView chipTv = Ui.toggleChip(c, m + " 分钟", m == checkinMinutes,
+                    v -> { checkinMinutes = m; render(); });
+            LinearLayout.LayoutParams lp = Ui.weight1();
+            if (i > 0) lp.leftMargin = Ui.dp(c, 8);
+            drow.addView(chipTv, lp);
+        }
+        card.addView(drow, Ui.matchWrap(8, c));
+        Button btn = Ui.primaryButton(c, checkinSaving ? "打卡中…"
+                : "✓ 打卡 " + CHECKIN_SPORTS[checkinSportIdx] + " " + checkinMinutes + " 分钟");
+        btn.setEnabled(!checkinSaving);
+        btn.setOnClickListener(v -> doCheckin());
+        card.addView(btn, Ui.matchWrap(12, c));
+        TextView more = Ui.text(c, "跟练、运动库在运动页 ›", 12, Ui.MUTED, false);
+        more.setGravity(Gravity.CENTER);
+        more.setOnClickListener(v -> activity().openExercise());
+        card.addView(more, Ui.matchWrap(10, c));
+        return card;
+    }
+
+    private void doCheckin() {
+        if (checkinSaving) return;
+        checkinSaving = true;
+        render();
+        try {
+            JSONObject body = new JSONObject();
+            body.put("exercise_date", todayString());
+            body.put("kind", CHECKIN_SPORTS[checkinSportIdx]);
+            body.put("duration_minutes", checkinMinutes);
+            body.put("note", "首页快捷打卡");
+            api().request("/api/v1/exercises", "POST", body, new ApiClient.Callback() {
+                @Override public void onOk(JSONObject res, int status) {
+                    checkinSaving = false;
+                    todayExerciseMinutes += checkinMinutes;
+                    toast("打卡成功 🎉 " + CHECKIN_SPORTS[checkinSportIdx] + " " + checkinMinutes + " 分钟");
+                    buildScore();
+                    loadStreak();
+                    render();
+                }
+
+                @Override public void onError(String message) {
+                    checkinSaving = false;
+                    toast("打卡失败，请稍后再试");
+                    render();
+                }
+            });
+        } catch (Exception e) {
+            checkinSaving = false;
+            toast("打卡失败，请稍后再试");
+            render();
+        }
+    }
+
+    /* 全部身体数据: 8 个指标一屏看全 (手环活动 + 手工记录合并), 每项带目标进度 */
+    private LinearLayout renderBodyDataCard() {
+        Context c = ctx();
+        LinearLayout card = Ui.card(c);
+        card.addView(Ui.sectionHeader(c, "全部身体数据", "去记录 ›", v -> activity().switchTab(2)));
+        LinearLayout row1 = Ui.row(c);
+        String stepSub = todayDay.steps >= Insights.STEP_GOAL ? "目标 8000 · 已达标 🎉"
+                : "目标 8000 · 还差 " + (Insights.STEP_GOAL - todayDay.steps) + " 步";
+        row1.addView(Ui.metricTile(c, Ui.PRIMARY, Ui.GREEN_SOFT, "👟", "步数 · 手环",
+                fmt((double) todayDay.steps), stepSub,
+                todayDay.steps / (double) Insights.STEP_GOAL), tileLp(true));
+        String calSub = todayDay.calories >= Insights.CAL_GOAL ? "目标 400 · 已达标 🎉"
+                : "目标 400 · 还差 " + (Insights.CAL_GOAL - todayDay.calories) + " 千卡";
+        row1.addView(Ui.metricTile(c, Ui.CAL, Ui.CAL_SOFT, "🔥", "活动消耗 · 千卡",
+                String.valueOf(todayDay.calories), calSub,
+                todayDay.calories / (double) Insights.CAL_GOAL), tileLp(false));
+        card.addView(row1, Ui.matchWrap(12, c));
+
+        LinearLayout row2 = Ui.row(c);
+        Double sleep = num(miToday, "sleep_hours");
+        if (sleep == null) {
+            JSONObject tr = recordByDateMap.get(todayString());
+            sleep = tr != null ? num(tr, "sleep_hours") : null;
+        }
+        row2.addView(Ui.metricTile(c, Ui.SLEEP, Ui.SLEEP_SOFT, "🌙", "睡眠",
+                sleep != null ? fmt(sleep) + " 小时" : "--",
+                sleep == null ? "手环监测或在记录页填写" : (sleep >= 7 ? "目标 8 · 作息充足" : "目标 8 · 建议睡满"),
+                sleep != null ? sleep / Insights.SLEEP_GOAL : -1), tileLp(true));
+        int woMin = Math.max(todayDay.workoutMinutes, todayExerciseMinutes);
+        row2.addView(Ui.metricTile(c, Ui.MOVE, Ui.MOVE_SOFT, "⏱️", "运动 · 分钟",
+                String.valueOf(woMin),
+                woMin >= Insights.WORKOUT_GOAL ? "目标 30 · 已达标 🎉" : "目标 30 · 还差 " + (Insights.WORKOUT_GOAL - woMin) + " 分钟",
+                woMin / (double) Insights.WORKOUT_GOAL), tileLp(false));
+        card.addView(row2, Ui.matchWrap(8, c));
+
+        LinearLayout row3 = Ui.row(c);
+        boolean fromMi = "mihealth".equals(data.optString("current_weight_source", ""));
+        row3.addView(Ui.metricTile(c, Ui.LIME, Ui.SOFT, "⚖️", "体重 · kg",
+                fmt(num(data, "current_weight")),
+                (diffLabel.isEmpty() ? (fromMi ? "来自小米同步" : "持续记录见证变化") : diffLabel), -1), tileLp(true));
+        Double bmi = num(data, "bmi");
+        row3.addView(Ui.metricTile(c, Ui.SLEEP, Ui.SOFT, "📏", "BMI",
+                bmi != null && bmi > 0 ? fmt(bmi) : "--",
+                bmi != null && bmi > 0 ? bmiStatus + " · 目标 " + fmt(num(data, "target_weight")) + " kg" : "先在记录页称一次体重", -1), tileLp(false));
+        card.addView(row3, Ui.matchWrap(8, c));
+
+        LinearLayout row4 = Ui.row(c);
+        int water = todayWaterMl();
+        row4.addView(Ui.metricTile(c, Color.parseColor("#4db2ff"), Ui.BLUE_SOFT, "💧", "饮水 · ml",
+                String.valueOf(water), "目标 2000 · " + Math.min(100, water * 100 / 2000) + "%",
+                water / 2000.0), tileLp(true));
+        JSONObject dt = data.optJSONObject("diet_today");
+        int dietK = dt != null ? (int) Math.round(dt.optDouble("total_kcal", 0)) : 0;
+        int dietN = dt != null ? dt.optInt("count", 0) : 0;
+        row4.addView(Ui.metricTile(c, Ui.CAL, Ui.SOFT, "🍽️", "饮食摄入 · 千卡",
+                dietN > 0 ? String.valueOf(dietK) : "--",
+                dietN > 0 ? "今日 " + dietN + " 项 · 目标约 2000" : "未记录，点上方拍照记餐",
+                dietN > 0 ? dietK / 2000.0 : -1), tileLp(false));
+        card.addView(row4, Ui.matchWrap(8, c));
+
+        if (showGoalProgress) {
+            FrameLayout bar = Ui.progressBar(c, goalProgressVal / 100.0, Ui.PRIMARY, 8);
+            card.addView(bar, Ui.matchWrap(12, c));
+            LinearLayout foot = Ui.row(c);
+            foot.addView(Ui.text(c, progressLabel + " · " + goalLabelText, 12, Ui.MUTED, false), Ui.weight1());
+            foot.addView(Ui.text(c, goalProgressVal + "%", 12, Ui.PRIMARY, true));
+            card.addView(foot, Ui.matchWrap(6, c));
+        }
+        return card;
+    }
+
+    /* 小米手环活动: 手环今日数据 + 同步入口 (活动数据来源就是手环/小米运动健康) */
+    private LinearLayout renderBandCard() {
+        Context c = ctx();
+        LinearLayout card = Ui.card(c);
+        LinearLayout head = Ui.row(c);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = Ui.column(c);
+        titles.addView(Ui.sectionTitle(c, "⌚ 小米手环 · 今日活动"));
+        String synced = mihealth.optString("last_synced_at", "");
+        titles.addView(Ui.text(c, (synced != null && !synced.isEmpty() && !"null".equals(synced))
+                ? "上次同步 " + synced : "步数、消耗、睡眠来自手环同步", 11, Ui.MUTED, false), Ui.matchWrap(2, c));
+        head.addView(titles, Ui.weight1());
+        Button refresh = Ui.ghostButton(c, syncing ? "同步中…" : "⚡ 同步");
+        refresh.setEnabled(!syncing);
+        refresh.setOnClickListener(v -> syncMiHealth());
+        head.addView(refresh);
+        card.addView(head);
+        boolean hasBand = todayDay.steps > 0 || todayDay.calories > 0 || todayDay.sleepHours > 0;
+        if (hasBand) {
+            card.addView(Ui.text(c, "👟 " + todayDay.steps + " 步   🔥 " + todayDay.calories
+                            + " 千卡   ⏱️ " + todayDay.workoutMinutes + " 分钟   🌙 "
+                            + (todayDay.sleepHours > 0 ? fmt(todayDay.sleepHours) + " 小时" : "--"),
+                    14, Ui.INK, true), Ui.matchWrap(12, c));
+            card.addView(Ui.text(c, Insights.calorieHint(todayDay.calories), 12, Ui.SLATE, false),
+                    Ui.matchWrap(4, c));
+        } else if (miConnected) {
+            card.addView(Ui.text(c, "手环已连接，今天还没有同步到数据，点右上角同步拉取。", 13, Ui.SLATE, false),
+                    Ui.matchWrap(10, c));
+        } else {
+            card.addView(Ui.text(c, "绑定小米运动健康后，手环记录的步数、活动消耗和睡眠会自动出现在这里，并计入今日评分。", 13, Ui.SLATE, false),
+                    Ui.matchWrap(10, c));
+            Button go = Ui.primaryButton(c, "去绑定小米运动健康");
+            go.setOnClickListener(v -> activity().switchTab(4));
+            card.addView(go, Ui.matchWrap(10, c));
+        }
         return card;
     }
 
@@ -1330,24 +1460,6 @@ public class IndexPage extends BasePage {
         int h = Ui.dp(ctx(), 8), v = Ui.dp(ctx(), 3);
         t.setPadding(h, v, h, v);
         return t;
-    }
-
-    private int pillBg(String kind) {
-        switch (kind) {
-            case "blue": return Ui.BLUE_SOFT;
-            case "amber": return Ui.AMBER_SOFT_DARK;
-            case "purple": return Ui.SLEEP_SOFT;
-            default: return Ui.GREEN_SOFT;
-        }
-    }
-
-    private int pillFg(String kind) {
-        switch (kind) {
-            case "blue": return Color.parseColor("#60a5fa");
-            case "amber": return Ui.AMBER_TEXT;
-            case "purple": return Ui.SLEEP;
-            default: return Ui.PRIMARY_DARK;
-        }
     }
 
     /* ---------------- 工具 ---------------- */
