@@ -1,6 +1,5 @@
 package art.qelora.welltrack.pages;
 
-import android.app.DatePickerDialog;
 import android.content.Context;
 import android.graphics.Color;
 import android.text.Editable;
@@ -26,6 +25,7 @@ import art.qelora.welltrack.R;
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.Sports;
 import art.qelora.welltrack.ui.BasePage;
+import art.qelora.welltrack.ui.Sheet;
 import art.qelora.welltrack.ui.Ui;
 
 /**
@@ -263,10 +263,12 @@ public class ExercisePage extends BasePage {
                 c.set(Calendar.MONTH, Integer.parseInt(exerciseDate.substring(5, 7)) - 1);
                 c.set(Calendar.DAY_OF_MONTH, Integer.parseInt(exerciseDate.substring(8, 10)));
             } catch (Exception ignored) {}
-            new DatePickerDialog(ctx(), (dp, y, m, dd) -> {
-                exerciseDate = String.format(Locale.US, "%04d-%02d-%02d", y, m + 1, dd);
-                render();
-            }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show();
+            Sheet.datePicker(ctx(), "运动日期",
+                    c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH),
+                    (y, m, dd) -> {
+                        exerciseDate = String.format(Locale.US, "%04d-%02d-%02d", y, m, dd);
+                        render();
+                    });
         });
         LinearLayout dateRow = Ui.row(ctx());
         dateRow.addView(dateTv, Ui.weight1());

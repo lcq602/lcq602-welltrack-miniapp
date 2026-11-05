@@ -2,8 +2,8 @@
 // 与 FastAPI 版 (backend/) 接口契约完全一致: 路径、字段、状态码、错误格式 {"detail": "..."}
 // 绑定: DB (D1), AI (Workers AI)
 // 变量: MIHEALTH_ENABLED / MIHEALTH_TOKEN_KEY / WECHAT_APP_ID / WECHAT_APP_SECRET / AI_MODEL
-// 说明: 小米直连登录协议 (connect/verify/上游同步) 为第二阶段; 本版已包含其数据层与状态读取,
-//       已同步进 D1 的小米数据可正常参与 dashboard/analytics 合并展示。
+// 说明: 小米直连登录协议已移植 (账号密码登录/二次验证/免密刷新/签名加密同步);
+//       Cron 每 10 分钟为已绑定用户自动增量同步近 2 天数据, 无需手动点击。
 
 const TZ = "Asia/Shanghai";
 
@@ -117,9 +117,9 @@ export default {
         case "GET /api/v1/backup": return json(await backup(env, uid));
         case "POST /api/v1/import": return await importBackup(request, env, uid);
         case "GET /api/v1/integrations/mihealth/status": return json(await mihealthStatus(env, uid));
-        case "POST /api/v1/integrations/mihealth/connect": return mihealthStage2();
-        case "POST /api/v1/integrations/mihealth/verify": return mihealthStage2();
-        case "POST /api/v1/integrations/mihealth/sync": return await mihealthSync(env, uid);
+        case "POST /api/v1/integrations/mihealth/connect": return await mihealthConnect(request, env, uid);
+        case "POST /api/v1/integrations/mihealth/verify": return await mihealthVerify(request, env, uid);
+        case "POST /api/v1/integrations/mihealth/sync": return await mihealthSync(request, env, uid);
         case "DELETE /api/v1/integrations/mihealth/connection": return await mihealthUnbind(env, uid);
         case "GET /api/v1/diet": return await listDiet(env, uid, url);
         case "POST /api/v1/diet": return await createDiet(request, env, uid);
@@ -136,11 +136,10 @@ export default {
       return err(500, "服务内部错误: " + (e && e.message ? e.message : String(e)));
     }
   },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(miScheduledSync(env));
+  },
 };
-
-function mihealthStage2() {
-  return err(501, "小米直连登录为第二阶段功能: 当前版本请先在旧后端完成绑定并导入数据, 或等待协议移植上线");
-}
 
 // ---------- 认证 ----------
 async function createSession(env, uid) {
@@ -425,11 +424,134 @@ async function mihealthStatus(env, uid) {
     latest, today: todaySummary, challenge: null,
   };
 }
-async function mihealthSync(env, uid) {
-  const st = await mihealthStatus(env, uid);
-  if (!st.connected) throw httpErr(400, "尚未连接小米运动健康");
-  // 第二阶段接入上游协议后在此执行增量同步; 当前返回已入库数据量
-  return json({ imported: 0, total_imports: st.import_count, last_synced_at: st.last_synced_at, note: "上游同步协议为第二阶段功能, 当前数据为已导入数据" });
+function miRequireReady(env) {
+  if (!miEnabled(env)) throw httpErr(503, "小米连接未启用");
+  if (!env.MIHEALTH_TOKEN_KEY) throw httpErr(503, "小米连接尚未配置");
+}
+async function mihealthConnect(request, env, uid) {
+  miRequireReady(env);
+  const b = await request.json().catch(() => ({}));
+  const username = String(b.username || "").trim();
+  const password = String(b.password || "");
+  if (!username || !password) throw httpErr(422, "账号和密码不能为空");
+  let session;
+  try {
+    session = await miConnect(username, password);
+  } catch (e) {
+    if (e instanceof MiChallenge) {
+      if (!e.state) throw httpErr(428, e.message);
+      const challengeId = randomToken();
+      const expiresAt = Math.floor(Date.now() / 1000) + 600;
+      const encState = await miEncryptSession(e.state, env.MIHEALTH_TOKEN_KEY);
+      await env.DB.prepare("DELETE FROM mihealth_challenges WHERE user_id=?").bind(uid).run();
+      await env.DB.prepare("INSERT INTO mihealth_challenges(challenge_id,user_id,encrypted_state,expires_at) VALUES(?,?,?,?)")
+        .bind(challengeId, uid, encState, expiresAt).run();
+      return json({ requires_verification: true, challenge_id: challengeId, hint: e.hint,
+        method: e.state.method || "Phone", attempts_remaining: 5, expires_at: expiresAt }, 202);
+    }
+    if (e instanceof MiErr) throw httpErr(502, e.message);
+    throw httpErr(502, "小米运动健康暂时无法连接，请稍后重试");
+  }
+  const encrypted = await miEncryptSession(session, env.MIHEALTH_TOKEN_KEY);
+  await env.DB.prepare("INSERT INTO mihealth_connections(user_id,encrypted_session) VALUES(?,?) " +
+    "ON CONFLICT(user_id) DO UPDATE SET encrypted_session=excluded.encrypted_session, linked_at=CURRENT_TIMESTAMP, last_synced_at=NULL")
+    .bind(uid, encrypted).run();
+  await env.DB.prepare("DELETE FROM mihealth_challenges WHERE user_id=?").bind(uid).run();
+  return json({ connected: true, linked_at: miLocalDatetime(Date.now() / 1000) });
+}
+async function mihealthVerify(request, env, uid) {
+  miRequireReady(env);
+  const b = await request.json().catch(() => ({}));
+  const challengeId = String(b.challenge_id || "");
+  const code = String(b.code || "");
+  if (!challengeId || !/^\d{4,10}$/.test(code)) throw httpErr(422, "验证码格式不正确");
+  const now = Math.floor(Date.now() / 1000);
+  const pending = await env.DB.prepare("SELECT encrypted_state,expires_at,attempts FROM mihealth_challenges WHERE challenge_id=? AND user_id=?")
+    .bind(challengeId, uid).first();
+  if (!pending) throw httpErr(404, "验证请求不存在或已完成");
+  if (pending.expires_at <= now) {
+    await env.DB.prepare("DELETE FROM mihealth_challenges WHERE challenge_id=? AND user_id=?").bind(challengeId, uid).run();
+    throw httpErr(410, "验证码已过期，请重新连接");
+  }
+  if (pending.attempts >= 5) {
+    await env.DB.prepare("DELETE FROM mihealth_challenges WHERE challenge_id=? AND user_id=?").bind(challengeId, uid).run();
+    throw httpErr(429, "验证码尝试次数过多，请重新连接");
+  }
+  const attempts = pending.attempts + 1;
+  await env.DB.prepare("UPDATE mihealth_challenges SET attempts=attempts+1 WHERE challenge_id=? AND user_id=?").bind(challengeId, uid).run();
+  let session;
+  try {
+    const state = await miDecryptSession(pending.encrypted_state, env.MIHEALTH_TOKEN_KEY);
+    session = await miVerifyChallenge(state, code);
+  } catch (e) {
+    if (e instanceof MiVerificationError) {
+      const remaining = Math.max(0, 5 - attempts);
+      if (remaining === 0) {
+        await env.DB.prepare("DELETE FROM mihealth_challenges WHERE challenge_id=? AND user_id=?").bind(challengeId, uid).run();
+        throw httpErr(429, "验证码尝试次数过多，请重新连接");
+      }
+      throw httpErr(422, `验证码不正确，还可尝试 ${remaining} 次`);
+    }
+    if (e instanceof MiErr) throw httpErr(502, e.message);
+    throw httpErr(502, "小米验证码验证暂时失败，请重试");
+  }
+  const encrypted = await miEncryptSession(session, env.MIHEALTH_TOKEN_KEY);
+  await env.DB.prepare("INSERT INTO mihealth_connections(user_id,encrypted_session) VALUES(?,?) " +
+    "ON CONFLICT(user_id) DO UPDATE SET encrypted_session=excluded.encrypted_session, linked_at=CURRENT_TIMESTAMP, last_synced_at=NULL")
+    .bind(uid, encrypted).run();
+  await env.DB.prepare("DELETE FROM mihealth_challenges WHERE challenge_id=? AND user_id=?").bind(challengeId, uid).run();
+  return json({ connected: true, linked_at: miLocalDatetime(Date.now() / 1000) });
+}
+async function miSyncUserData(env, uid, days) {
+  const conn = await env.DB.prepare("SELECT encrypted_session FROM mihealth_connections WHERE user_id=?").bind(uid).first();
+  if (!conn) throw httpErr(409, "请先绑定小米运动健康");
+  let session = await miDecryptSession(conn.encrypted_session, env.MIHEALTH_TOKEN_KEY);
+  const endMs = Date.now();
+  const startMs = endMs - days * 86400000;
+  let readings;
+  try {
+    readings = await miReadMetrics(session, startMs, endMs);
+  } catch (e) {
+    if (e instanceof MiAuthError) {
+      session = await miRefreshSession(session);
+      readings = await miReadMetrics(session, startMs, endMs);
+    } else throw e;
+  }
+  const current = await env.DB.prepare("SELECT encrypted_session FROM mihealth_connections WHERE user_id=?").bind(uid).first();
+  if (!current) throw httpErr(409, "小米连接已解除，请重新绑定");
+  const encrypted = await miEncryptSession(session, env.MIHEALTH_TOKEN_KEY);
+  await env.DB.prepare("UPDATE mihealth_connections SET encrypted_session=?, last_synced_at=CURRENT_TIMESTAMP WHERE user_id=?")
+    .bind(encrypted, uid).run();
+  let imported = 0;
+  if (readings.length) {
+    const stmt = env.DB.prepare("INSERT OR IGNORE INTO mihealth_imports(user_id,source_id,metric,recorded_at,value,unit,payload) VALUES(?,?,?,?,?,?,?)");
+    const results = await env.DB.batch(readings.map((r) =>
+      stmt.bind(uid, r.source_id, r.metric, r.recorded_at, r.value, r.unit, JSON.stringify(r.payload))));
+    imported = results.reduce((acc, r) => acc + (r.meta && r.meta.changes ? r.meta.changes : 0), 0);
+  }
+  return { imported, received: readings.length, days, synced_at: miLocalDatetime(Date.now() / 1000) };
+}
+async function mihealthSync(request, env, uid) {
+  miRequireReady(env);
+  const b = await request.json().catch(() => ({}));
+  let days = parseInt(b.days !== undefined ? b.days : 14, 10);
+  if (!isFinite(days) || days < 1) days = 14;
+  if (days > 90) days = 90;
+  try {
+    return json(await miSyncUserData(env, uid, days));
+  } catch (e) {
+    if (e && e.status) throw e;
+    if (e instanceof MiErr) throw httpErr(502, e.message);
+    throw httpErr(502, "小米运动健康暂时无法同步，请稍后重试");
+  }
+}
+// Cron 每 10 分钟触发: 为所有已绑定用户增量同步近 2 天数据 (去重入库, 单个用户失败不影响其他用户)
+async function miScheduledSync(env) {
+  if (!miEnabled(env) || !env.MIHEALTH_TOKEN_KEY) return;
+  const { results } = await env.DB.prepare("SELECT user_id FROM mihealth_connections").all();
+  for (const row of results || []) {
+    try { await miSyncUserData(env, row.user_id, 2); } catch (e) { /* 隔离单个用户失败 */ }
+  }
 }
 async function mihealthUnbind(env, uid) {
   await env.DB.prepare("DELETE FROM mihealth_connections WHERE user_id=?").bind(uid).run();
@@ -972,4 +1094,667 @@ if (reply) {
 await env.DB.prepare("INSERT OR REPLACE INTO agent_cache(user_id,cache_date,kind,content) VALUES(?,?,'daily_insight',?)").bind(uid, today, reply).run();
 }
 return json({ date: today, insight: reply, cached: false, model});
+}
+
+// ============================================================
+// 小米运动健康协议移植 (自 backend/app/integrations/vendor/{client,login}.py 与 mihealth.py)
+// 覆盖: 账号密码登录 / 二次验证 / pass_token 免密刷新 / 签名加密数据读取 / 会话 Fernet 加解密
+// 自动同步: export 的 scheduled 处理器由 Cron 每 10 分钟触发, 为所有已绑定用户增量同步近 2 天数据
+// ============================================================
+
+class MiErr extends Error {}
+class MiAuthError extends MiErr {}
+class MiVerificationError extends MiErr {}
+class MiChallenge extends MiErr {
+  constructor(message, state, hint) { super(message); this.state = state || null; this.hint = hint || ""; }
+}
+
+// ---------- base64 / 字节工具 ----------
+function b64enc(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function b64dec(str) {
+  const bin = atob(String(str).replace(/\s/g, ""));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function b64urlEnc(bytes) { return b64enc(bytes).replace(/\+/g, "-").replace(/\//g, "_"); }
+function b64urlDec(str) { return b64dec(String(str).replace(/-/g, "+").replace(/_/g, "/")); }
+function utf8Bytes(s) { return new TextEncoder().encode(s); }
+function bytesToUtf8(b) { return new TextDecoder().decode(b); }
+async function shaDigest(algo, bytes) { return new Uint8Array(await crypto.subtle.digest(algo, bytes)); }
+async function sha1B64(items) { return b64enc(await shaDigest("SHA-1", utf8Bytes(items.join("&")))); }
+function sleepMs(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+// ---------- MD5 (纯 JS; WebCrypto 不提供, 登录密码哈希与 deviceId 需要) ----------
+function md5Bytes(input) {
+  const S = [7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22, 5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
+             4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23, 6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21];
+  const K = [];
+  for (let i = 0; i < 64; i++) K.push(Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296));
+  const bitLen = input.length * 8;
+  const padded = new Uint8Array(((input.length + 8) >> 6 << 6) + 64);
+  padded.set(input);
+  padded[input.length] = 0x80;
+  const dv = new DataView(padded.buffer);
+  dv.setUint32(padded.length - 8, bitLen >>> 0, true);
+  dv.setUint32(padded.length - 4, Math.floor(bitLen / 4294967296), true);
+  let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+  const M = new Uint32Array(16);
+  for (let off = 0; off < padded.length; off += 64) {
+    for (let i = 0; i < 16; i++) M[i] = dv.getUint32(off + i * 4, true);
+    let A = a0, B = b0, C = c0, D = d0;
+    for (let i = 0; i < 64; i++) {
+      let F, g;
+      if (i < 16) { F = (B & C) | (~B & D); g = i; }
+      else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16; }
+      else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) % 16; }
+      else { F = C ^ (B | ~D); g = (7 * i) % 16; }
+      const tmp = D; D = C; C = B;
+      const sum = (A + F + K[i] + M[g]) >>> 0;
+      B = (B + (((sum << S[i]) | (sum >>> (32 - S[i]))) >>> 0)) >>> 0;
+      A = tmp;
+    }
+    a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
+  }
+  const out = new Uint8Array(16);
+  const odv = new DataView(out.buffer);
+  odv.setUint32(0, a0, true); odv.setUint32(4, b0, true); odv.setUint32(8, c0, true); odv.setUint32(12, d0, true);
+  return out;
+}
+function md5Upper(s) {
+  return [...md5Bytes(utf8Bytes(s))].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+// ---------- RC4 (drop 1024, 与 vendor/client.py 一致) ----------
+class RC4 {
+  constructor(keyBytes, drop = 1024) {
+    if (keyBytes.length !== 32) throw new Error("rc4Key length is invalid");
+    const s = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) s[i] = i;
+    let j = 0;
+    for (let i = 0; i < 256; i++) { j = (j + s[i] + keyBytes[i % keyBytes.length]) & 0xff; const t = s[i]; s[i] = s[j]; s[j] = t; }
+    this.s = s; this.i = 0; this.j = 0;
+    if (drop) this._gen(drop);
+  }
+  _gen(n) {
+    const s = this.s; let i = this.i, j = this.j;
+    for (let k = 0; k < n; k++) {
+      i = (i + 1) & 0xff; j = (j + s[i]) & 0xff;
+      const t = s[i]; s[i] = s[j]; s[j] = t;
+    }
+    this.i = i; this.j = j;
+  }
+  crypt(data) {
+    const s = this.s; let i = this.i, j = this.j;
+    const out = new Uint8Array(data.length);
+    for (let n = 0; n < data.length; n++) {
+      i = (i + 1) & 0xff; j = (j + s[i]) & 0xff;
+      const t = s[i]; s[i] = s[j]; s[j] = t;
+      out[n] = data[n] ^ s[(s[i] + s[j]) & 0xff];
+    }
+    this.i = i; this.j = j;
+    return out;
+  }
+}
+
+// ---------- Fernet (会话加解密; 格式与 cryptography.Fernet 互通) ----------
+async function fernetKeys(keyStr) {
+  if (!keyStr) throw new MiErr("尚未设置小米会话加密密钥");
+  let raw;
+  try { raw = b64urlDec(String(keyStr).trim()); } catch (e) { throw new MiErr("小米会话加密密钥格式无效"); }
+  if (raw.length !== 32) throw new MiErr("小米会话加密密钥格式无效");
+  return { signKey: raw.subarray(0, 16), encKey: raw.subarray(16, 32) };
+}
+async function hmacSha256(keyBytes, dataBytes) {
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, dataBytes));
+}
+async function fernetEncrypt(plainBytes, keyStr) {
+  const { signKey, encKey } = await fernetKeys(keyStr);
+  const iv = new Uint8Array(16); crypto.getRandomValues(iv);
+  const ts = new Uint8Array(8);
+  new DataView(ts.buffer).setBigUint64(0, BigInt(Math.floor(Date.now() / 1000)), false);
+  const akey = await crypto.subtle.importKey("raw", encKey, { name: "AES-CBC" }, false, ["encrypt"]);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-CBC", iv }, akey, plainBytes));
+  const body = new Uint8Array(1 + 8 + 16 + ct.length);
+  body[0] = 0x80; body.set(ts, 1); body.set(iv, 9); body.set(ct, 25);
+  const mac = await hmacSha256(signKey, body);
+  const token = new Uint8Array(body.length + 32);
+  token.set(body); token.set(mac, body.length);
+  return b64urlEnc(token);
+}
+async function fernetDecrypt(tokenStr, keyStr) {
+  const { signKey, encKey } = await fernetKeys(keyStr);
+  let raw;
+  try { raw = b64urlDec(String(tokenStr).trim()); } catch (e) { throw new MiErr("小米会话无法解密，请重新绑定"); }
+  if (raw.length < 57 || raw[0] !== 0x80) throw new MiErr("小米会话无法解密，请重新绑定");
+  const body = raw.subarray(0, raw.length - 32), mac = raw.subarray(raw.length - 32);
+  const expect = await hmacSha256(signKey, body);
+  let diff = 0; for (let i = 0; i < 32; i++) diff |= expect[i] ^ mac[i];
+  if (diff !== 0) throw new MiErr("小米会话无法解密，请重新绑定");
+  const iv = raw.subarray(9, 25), ct = raw.subarray(25, raw.length - 32);
+  const akey = await crypto.subtle.importKey("raw", encKey, { name: "AES-CBC" }, false, ["decrypt"]);
+  try {
+    return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-CBC", iv }, akey, ct));
+  } catch (e) { throw new MiErr("小米会话无法解密，请重新绑定"); }
+}
+async function miEncryptSession(sessionObj, keyStr) {
+  return fernetEncrypt(utf8Bytes(JSON.stringify(sessionObj)), keyStr);
+}
+async function miDecryptSession(blob, keyStr) {
+  const clear = await fernetDecrypt(blob, keyStr);
+  let obj;
+  try { obj = JSON.parse(bytesToUtf8(clear)); } catch (e) { throw new MiErr("小米会话无法解密，请重新绑定"); }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new MiErr("小米会话格式无效，请重新绑定");
+  return obj;
+}
+
+// ---------- Cookie 罐 (替代 requests.Session 的 cookie 行为) ----------
+class CookieJar {
+  constructor() { this.cookies = []; }
+  set(name, value, domain, path = "/", secure = false, expires = null) {
+    const d = (domain || "").toLowerCase();
+    this.cookies = this.cookies.filter((c) => !(c.name === name && c.domain === d && c.path === path));
+    this.cookies.push({ name, value: String(value), domain: d, path, secure: !!secure, expires });
+  }
+  get(name, domainHint) {
+    let fallback = null;
+    for (const c of this.cookies) {
+      if (c.name !== name) continue;
+      if (domainHint && (domainHint === c.domain || domainHint.endsWith("." + c.domain.replace(/^\./, "")))) return c.value;
+      if (!fallback) fallback = c.value;
+    }
+    return fallback;
+  }
+  headerFor(host) {
+    const h = host.toLowerCase();
+    const pairs = [];
+    for (const c of this.cookies) {
+      const d = c.domain.replace(/^\./, "");
+      if (h === d || h.endsWith("." + d)) pairs.push(`${c.name}=${c.value}`);
+    }
+    return pairs.join("; ");
+  }
+  absorb(resp) {
+    let list = [];
+    try { if (typeof resp.headers.getSetCookie === "function") list = resp.headers.getSetCookie(); } catch (e) {}
+    if (!list || !list.length) { const single = resp.headers.get("set-cookie"); if (single) list = [single]; }
+    for (const line of list || []) {
+      const parts = String(line).split(";");
+      const first = parts[0]; const eq = first.indexOf("=");
+      if (eq <= 0) continue;
+      const name = first.slice(0, eq).trim(), value = first.slice(eq + 1).trim();
+      let domain = "", path = "/", secure = false, expires = null;
+      for (const attr of parts.slice(1)) {
+        const kv = attr.split("="); const k = (kv[0] || "").trim().toLowerCase();
+        const v = kv.slice(1).join("=").trim();
+        if (k === "domain") domain = v.toLowerCase();
+        else if (k === "path") path = v || "/";
+        else if (k === "secure") secure = true;
+        else if (k === "expires") { const t = Date.parse(v); expires = isNaN(t) ? null : Math.floor(t / 1000); }
+      }
+      this.set(name, value, domain, path, secure, expires);
+    }
+  }
+  serialize() { return this.cookies.map((c) => ({ ...c })); }
+  static restore(arr) {
+    const jar = new CookieJar();
+    for (const c of arr || []) jar.set(c.name, c.value, c.domain || "", c.path || "/", c.secure, c.expires);
+    return jar;
+  }
+}
+
+// 带 cookie 罐的 HTTP 请求 (含手动重定向跟随, 以便吸收中间响应的 Set-Cookie)
+async function xfetch(jar, method, urlStr, opts = {}) {
+  const tries = opts.tries || 2;
+  let lastErr = null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      return await xfetchOnce(jar, method, urlStr, opts);
+    } catch (e) { lastErr = e; if (attempt + 1 < tries) await sleepMs(400 * (attempt + 1)); }
+  }
+  throw new MiErr("网络请求失败：" + (lastErr && lastErr.message ? lastErr.message : String(lastErr)));
+}
+async function xfetchOnce(jar, method, urlStr, opts) {
+  let url = new URL(urlStr);
+  if (opts.params) for (const [k, v] of Object.entries(opts.params)) if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+  let current = url.toString(), m = method.toUpperCase(), body = opts.data ? new URLSearchParams(opts.data).toString() : undefined;
+  for (let hop = 0; hop < 6; hop++) {
+    const headers = { "User-Agent": opts.ua || MI_UA_SDK, ...(opts.headers || {}) };
+    if (body !== undefined && m !== "GET") headers["Content-Type"] = "application/x-www-form-urlencoded";
+    const cookieParts = [];
+    if (jar) { const h = jar.headerFor(new URL(current).hostname); if (h) cookieParts.push(h); }
+    if (opts.cookies) for (const [k, v] of Object.entries(opts.cookies)) if (v) cookieParts.push(`${k}=${v}`);
+    if (cookieParts.length) headers["Cookie"] = cookieParts.join("; ");
+    const resp = await fetch(current, { method: m, headers, body: m === "GET" ? undefined : body, redirect: "manual" });
+    if (jar) jar.absorb(resp);
+    const status = resp.status;
+    const location = resp.headers.get("location");
+    if ((opts.followRedirects === false) || status < 300 || status >= 400 || !location) {
+      const text = await resp.text();
+      return { status, text, headers: resp.headers };
+    }
+    current = new URL(location, current).toString();
+    if (status === 303 || ((status === 301 || status === 302) && m === "POST")) { m = "GET"; body = undefined; }
+  }
+  throw new MiErr("重定向次数过多");
+}
+function miJsonBody(text) {
+  const i = (text || "").indexOf("{");
+  if (i < 0) return {};
+  try { return JSON.parse(text.slice(i)); } catch (e) { return {}; }
+}
+
+// ---------- 小米账号登录 (vendor/login.py 移植) ----------
+const MI_ACCOUNT_HOST = "https://account.xiaomi.com";
+const MI_IDENTITY = "https://account.xiaomi.com/identity";
+const MI_SID_HEALTH = "miothealth";
+const MI_SDK_VERSION = "accountsdk-18.8.15";
+const MI_UA_SDK = "XiaomiHealthApi-ABCDE APP/com.xiaomi.mihome APPV/10.5.201";
+const MI_UA_APP_TPL = "MiHome/11.3.203 (com.xiaomi.mihome; build:11.3.203; Android 9) APP/com.xiaomi.mihome APPV/11.3.203 DeviceId/{dev} UserId/{uid} Platform/Android Region/CN L/zh_CN";
+
+function miRandomDeviceId() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const a = new Uint8Array(16); crypto.getRandomValues(a);
+  return [...a].map((b) => chars[b % chars.length]).join("");
+}
+function miNewLoginSession(deviceRaw) {
+  const raw = deviceRaw || miRandomDeviceId();
+  const jar = new CookieJar();
+  for (const dom of ["mi.com", "xiaomi.com"]) {
+    jar.set("sdkVersion", MI_SDK_VERSION, dom);
+    jar.set("deviceId", raw, dom);
+  }
+  return { jar, deviceIdMd5: md5Upper(raw), userId: "" };
+}
+function miSerializeSession(sess) {
+  return { device_id: sess.deviceIdMd5, user_id: sess.userId || "", cookies: sess.jar.serialize() };
+}
+function miRestoreSession(state) {
+  return { jar: CookieJar.restore((state || {}).cookies || []), deviceIdMd5: (state || {}).device_id || "", userId: (state || {}).user_id || "" };
+}
+function miServiceTokenFromJar(jar) {
+  return jar.get("serviceToken", "sts-hlth.io.mi.com") || jar.get("serviceToken");
+}
+async function miServiceLogin(sess, sid, extraCookies) {
+  const r = await xfetch(sess.jar, "GET", `${MI_ACCOUNT_HOST}/pass/serviceLogin`,
+    { params: { sid, _json: "true" }, cookies: extraCookies });
+  const j = miJsonBody(r.text);
+  if (!j._sign) throw new MiErr(`serviceLogin 未返回 _sign（HTTP ${r.status}）`);
+  return j;
+}
+async function miLoginWithPassword(username, password, sid = MI_SID_HEALTH) {
+  const sess = miNewLoginSession();
+  const j = await miServiceLogin(sess, sid, { userId: username });
+  const fields = {
+    user: username, hash: md5Upper(password), sid, _json: "true", _sign: j._sign,
+    qs: j.qs || `?sid=${sid}&_json=true`, callback: j.callback || "", locale: "zh_CN",
+  };
+  const r2 = await xfetch(sess.jar, "POST", `${MI_ACCOUNT_HOST}/pass/serviceLoginAuth2`,
+    { params: fields, followRedirects: false });
+  const j2 = miJsonBody(r2.text);
+  if (j2.captchaUrl) {
+    const e = new MiErr("需要验证码"); e.captchaUrl = j2.captchaUrl; e.code = j2.code; throw e;
+  }
+  if (!(typeof j2.ssecurity === "string" && j2.ssecurity.length > 4)) {
+    if (j2.notificationUrl) {
+      const e = new MiErr("账号需要二次验证（2FA）");
+      e.need2fa = true; e.notificationUrl = j2.notificationUrl; e.raw = j2; e.sess = sess;
+      throw e;
+    }
+    throw new MiErr(j2.desc || `登录失败 code=${j2.code}`);
+  }
+  let token = null;
+  if (j2.location) {
+    await xfetch(sess.jar, "GET", j2.location, {});
+    token = miServiceTokenFromJar(sess.jar);
+  }
+  return { sess, result: {
+    ssecurity: j2.ssecurity, service_token: token, cuser_id: j2.cUserId, user_id: j2.userId,
+    pass_token: j2.passToken, sid, ts: Math.floor(Date.now() / 1000),
+  } };
+}
+function miIdentityHeaders(sess) {
+  return {
+    "User-Agent": MI_UA_APP_TPL.replace("{dev}", sess.deviceIdMd5 || "").replace("{uid}", sess.userId || ""),
+    "Content-Type": "application/x-www-form-urlencoded", "Referer": "https://account.xiaomi.com/",
+  };
+}
+async function miIdCall(sess, method, url, step, opts = {}) {
+  const r = await xfetch(sess.jar, method, url, {
+    ...opts, headers: miIdentityHeaders(sess),
+    cookies: sess.deviceIdMd5 ? { deviceId: sess.deviceIdMd5 } : {},
+  });
+  if (!(r.text || "").trim()) throw new MiErr(`[${step}] 服务端返回空响应（HTTP ${r.status}）——通常是 UA/deviceId 不被接受`);
+  return r;
+}
+async function miStart2fa(sess, notificationUrl, sid = MI_SID_HEALTH) {
+  let url = notificationUrl;
+  if (!url.startsWith("http")) url = MI_ACCOUNT_HOST + url;
+  await miIdCall(sess, "GET", url, "authStart");
+  const q = new URL(url).searchParams;
+  const ctx = q.get("context") || "";
+  const useSid = q.get("sid") || sid;
+  if (q.get("userId")) sess.userId = q.get("userId");
+  const r = await miIdCall(sess, "GET", `${MI_IDENTITY}/list`, "identity/list",
+    { params: { sid: useSid, supportedMask: "0", _locale: "zh_CN", context: ctx } });
+  const idata = miJsonBody(r.text);
+  const flag = idata.flag !== undefined ? idata.flag : 4;
+  const method = flag === 8 ? "Email" : "Phone";
+  await miIdCall(sess, "GET", `${MI_IDENTITY}/auth/verify${method}`, `verify${method}(trigger)`,
+    { params: { _flag: String(flag), _json: "true" } });
+  if (method === "Phone") {
+    await miIdCall(sess, "POST", `${MI_IDENTITY}/auth/sendPhoneTicket`, "sendPhoneTicket",
+      { data: { retry: "0", icode: "", _json: "true" } });
+  }
+  let hint = "";
+  for (const k of ["mask", "notification", "email", "phone", "address"]) if (idata[k]) { hint = idata[k]; break; }
+  return { context: ctx, flag, method, hint };
+}
+async function miFinish2fa(sess, code, context, flag = 4, sid = MI_SID_HEALTH) {
+  const method = flag === 8 ? "Email" : "Phone";
+  const r = await miIdCall(sess, "POST", `${MI_IDENTITY}/auth/verify${method}`, `verify${method}(submit)`, {
+    params: { _dc: String(Date.now()), _flag: String(flag), _json: "true", sid, context },
+    data: { _flag: String(flag), ticket: String(code).trim(), trust: "false", _json: "true" },
+  });
+  const vresp = miJsonBody(r.text);
+  if (vresp.code !== undefined && vresp.code !== 0 && vresp.code !== null && !vresp.location) {
+    const e = new MiErr(`验证码校验未通过（code=${vresp.code} ${vresp.desc || ""}）`); e.code = vresp.code; throw e;
+  }
+  let loc = vresp.location || r.headers.get("location");
+  if (!loc) { const m = (r.text || "").match(/location\s*[:=]\s*["']([^"']+)/); loc = m ? m[1] : null; }
+  if (!loc) throw new MiErr(`验证码校验后未拿到跳转地址（HTTP ${r.status}）`);
+  if (!loc.startsWith("http")) loc = MI_ACCOUNT_HOST + loc;
+  await xfetch(sess.jar, "GET", loc, {});
+  const r3 = await xfetch(sess.jar, "GET", `${MI_ACCOUNT_HOST}/pass/serviceLogin`, { params: { sid, _json: "true" } });
+  const j3 = miJsonBody(r3.text);
+  if (j3.code !== 0 || !j3.ssecurity) throw new MiErr(`二次验证后登录未完成（code=${j3.code} ${j3.desc || ""}）`);
+  let token = null;
+  if (j3.location) {
+    await xfetch(sess.jar, "GET", j3.location, { followRedirects: false });
+    token = miServiceTokenFromJar(sess.jar);
+  }
+  return {
+    ssecurity: j3.ssecurity, service_token: token,
+    cuser_id: j3.cUserId || sess.jar.get("cUserId"), user_id: j3.userId || sess.jar.get("userId"),
+    pass_token: j3.passToken || sess.jar.get("passToken"), sid, ts: Math.floor(Date.now() / 1000),
+  };
+}
+async function miExchangePassToken(passToken, cuserId, userId, sid = MI_SID_HEALTH) {
+  const jar = new CookieJar();
+  const ck = { passToken, cUserId: cuserId, userId: userId === null || userId === undefined ? "" : String(userId) };
+  for (const [k, v] of Object.entries(ck)) if (v) jar.set(k, v, ".account.xiaomi.com");
+  const sess = { jar, deviceIdMd5: "", userId: "" };
+  const r = await xfetch(jar, "GET", `${MI_ACCOUNT_HOST}/pass/serviceLogin`,
+    { params: { sid, _json: "true" }, cookies: ck });
+  const j = miJsonBody(r.text);
+  if (j.code !== 0 || !j.location) throw new MiErr(`passToken 无效或已过期（code=${j.code} ${j.desc || ""}）`);
+  await xfetch(jar, "GET", j.location, { cookies: ck, followRedirects: false });
+  const token = miServiceTokenFromJar(jar);
+  if (!token) throw new MiErr("STS 回调未返回 serviceToken");
+  return { ssecurity: j.ssecurity, service_token: token, cuser_id: j.cUserId || cuserId,
+           user_id: j.userId || userId, sid, ts: Math.floor(Date.now() / 1000) };
+}
+async function miRefreshSession(session) {
+  if (!session.pass_token || !session.cuser_id) throw new MiErr("小米会话已过期，请重新绑定");
+  const s = await miExchangePassToken(session.pass_token, session.cuser_id, session.user_id || "");
+  // 保留 pass_token 以便下次继续免密续期 (与原 save_session 合并语义一致)
+  s.pass_token = session.pass_token;
+  s.region = session.region || "cn";
+  return s;
+}
+async function miConnect(username, password) {
+  let out;
+  try {
+    out = await miLoginWithPassword(username, password);
+  } catch (e) {
+    if (e && e.need2fa) {
+      let challenge;
+      try { challenge = await miStart2fa(e.sess, e.notificationUrl); }
+      catch (e2) { throw new MiErr("无法启动小米短信验证，请稍后重试"); }
+      const state = {
+        session: miSerializeSession(e.sess), context: challenge.context, flag: challenge.flag,
+        method: challenge.method, hint: challenge.hint, sid: (e.raw && e.raw.sid) || MI_SID_HEALTH,
+      };
+      const label = challenge.method === "Phone" ? "短信" : "邮箱";
+      throw new MiChallenge(`小米已发送${label}验证码`, state, challenge.hint);
+    }
+    if (e && e.captchaUrl) throw new MiChallenge("小米账号要求验证码，当前连接流程暂不支持", null, "");
+    if (e instanceof MiErr) throw new MiErr("小米账号登录失败，请检查账号密码或稍后重试");
+    throw e;
+  }
+  const session = out.result;
+  for (const f of ["ssecurity", "service_token", "cuser_id", "pass_token"]) {
+    if (!session[f]) throw new MiErr("小米登录未返回完整健康会话");
+  }
+  session.region = "cn";
+  return session;
+}
+async function miVerifyChallenge(state, code) {
+  const sess = miRestoreSession(state.session);
+  let result;
+  try {
+    result = await miFinish2fa(sess, code, state.context, parseInt(state.flag !== undefined ? state.flag : 4, 10), state.sid || MI_SID_HEALTH);
+  } catch (e) {
+    if (e && (e.code !== undefined && e.code !== null || String(e.message).includes("验证码校验未通过"))) {
+      throw new MiVerificationError("验证码不正确或已过期");
+    }
+    if (e instanceof MiErr) throw new MiErr("小米验证码验证暂时失败，请重试");
+    throw e;
+  }
+  for (const f of ["ssecurity", "service_token", "cuser_id", "pass_token"]) {
+    if (!result[f]) throw new MiErr("小米验证完成，但未返回完整健康会话");
+  }
+  result.region = "cn";
+  return result;
+}
+
+// ---------- 米健康数据客户端 (vendor/client.py 移植: 签名加密 + 分页) ----------
+async function miSessionKey(ssecurity, nonce) {
+  const a = b64dec(ssecurity), b = b64dec(nonce);
+  const joined = new Uint8Array(a.length + b.length);
+  joined.set(a); joined.set(b, a.length);
+  return b64enc(await shaDigest("SHA-256", joined));
+}
+function miGenNonce() {
+  const rand = new Uint8Array(8); crypto.getRandomValues(rand);
+  const minutes = Math.floor(Date.now() / 60000);
+  const out = new Uint8Array(12);
+  out.set(rand);
+  new DataView(out.buffer).setInt32(8, minutes, false);
+  return b64enc(out);
+}
+async function miSignedEncrypted(method, path, params, nonce, security) {
+  const skey = await miSessionKey(security, nonce);
+  const plain = {};
+  for (const [k, v] of Object.entries(params)) if (k && v !== "" && v !== null && v !== undefined) plain[k] = String(v);
+  const p = (() => { try { return new URL(path, "https://x").pathname; } catch (e) { return path; } })();
+  const keys = Object.keys(plain).sort();
+  plain["rc4_hash__"] = await sha1B64([method.toUpperCase(), p, ...keys.map((k) => `${k}=${plain[k]}`), skey]);
+  const rc4 = new RC4(b64dec(skey));
+  const enc = {};
+  for (const k of Object.keys(plain).sort()) enc[k] = b64enc(rc4.crypt(utf8Bytes(plain[k])));
+  const sig = await sha1B64([method.toUpperCase(), p, ...Object.keys(enc).sort().map((k) => `${k}=${enc[k]}`), skey]);
+  return { ...enc, signature: sig, _nonce: nonce };
+}
+async function miDecryptResponseAsync(bodyB64, nonce, security) {
+  const skey = await miSessionKey(security, nonce);
+  return bytesToUtf8(new RC4(b64dec(skey)).crypt(b64dec(bodyB64)));
+}
+const MI_SCALAR_FIELDS = {
+  steps: ["steps"], calories: ["calories"], heart_rate: ["bpm", "heart_rate"], spo2: ["spo2"],
+  stress: ["stress", "stress_value"], vo2_max: ["vo2_max"], pai: ["daily_pai", "pai", "value"],
+  weight: ["weight"], energy: ["energy"],
+};
+function miCanonicalNumber(key, item) {
+  for (const f of MI_SCALAR_FIELDS[key] || []) {
+    const v = item[f];
+    if (typeof v === "number" && isFinite(v)) return v;
+  }
+  return null;
+}
+function miDedupItems(items, key) {
+  const byT = new Map();
+  for (const x of items) {
+    const t = x._t;
+    if (t === undefined || t === null) continue;
+    const cur = byT.get(t);
+    if (!cur) { byT.set(t, { ...x }); continue; }
+    const nNew = miCanonicalNumber(key || "", x), nCur = miCanonicalNumber(key || "", cur);
+    if (nNew !== null && (nCur === null || nNew > nCur)) byT.set(t, { ...cur, ...x });
+    else { for (const [k, v] of Object.entries(x)) if (!(k in cur)) cur[k] = v; }
+  }
+  return [...byT.values()].sort((a, b) => a._t - b._t);
+}
+class MiHealthClient {
+  constructor(ssecurity, serviceToken, cuserId, region = "cn") {
+    this.security = ssecurity; this.serviceToken = serviceToken; this.cuser = cuserId;
+    this.base = region === "abroad" ? "https://region.hlth.io.mi.com" : "https://hlth.io.mi.com";
+    this.lastSend = 0;
+  }
+  async _throttle() {
+    const wait = 500 - (Date.now() - this.lastSend);
+    if (wait > 0) await sleepMs(wait);
+    this.lastSend = Date.now();
+  }
+  async call(subpath, params, method = "GET") {
+    const nonce = miGenNonce();
+    const q = await miSignedEncrypted(method, "/app/v1/" + subpath, params, nonce, this.security);
+    const url = this.base + "/app/v1/" + subpath;
+    await this._throttle();
+    const headers = { "Cookie": `cUserId=${this.cuser}; serviceToken=${this.serviceToken}; locale=zh_cn` };
+    let resp;
+    if (method.toUpperCase() === "GET") {
+      const u = new URL(url);
+      for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
+      resp = await fetch(u.toString(), { headers });
+    } else {
+      resp = await fetch(url, { method: "POST", headers: { ...headers, "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(q).toString() });
+    }
+    const text = await resp.text();
+    if (resp.status === 401 || resp.status === 403) throw new MiAuthError(`auth failed (HTTP ${resp.status})`);
+    if (resp.status >= 400) throw new MiErr(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    let data;
+    try { data = JSON.parse(await miDecryptResponseAsync(text, nonce, this.security)); }
+    catch (e) {
+      try { data = JSON.parse(text); } catch (e2) { throw new MiErr(`undecodable response: ${text.slice(0, 200)}`); }
+    }
+    const code = data ? data.code : undefined;
+    if (code === 2 || (typeof code === "number" && String((data && data.message) || "").toLowerCase().includes("auth"))) {
+      throw new MiAuthError(`auth failed (code=${code})`);
+    }
+    return data;
+  }
+  async _pagedAll(fetchPage, listField, startMs, endMs, maxPages, key) {
+    let items = [], nk = null;
+    for (let p = 0; p < maxPages; p++) {
+      const res = ((await fetchPage(nk)) || {}).result || {};
+      const batch = res[listField] || [];
+      for (const it of batch) if (it._t === undefined) it._t = it.time;
+      items = items.concat(batch.filter((it) => (it.time || 0) * 1000 >= startMs && (it.time || 0) * 1000 <= endMs));
+      nk = res.next_key;
+      if (!res.has_more || !nk) return { items: miDedupItems(items, key), hasMore: false };
+      if (batch.length && Math.max(...batch.map((it) => it.time || 0)) * 1000 < startMs) {
+        return { items: miDedupItems(items, key), hasMore: false };
+      }
+    }
+    return { items: miDedupItems(items, key), hasMore: true };
+  }
+  getFitnessByTime(key, startMs, endMs, nextKey = null) {
+    const data = { key, startTime: startMs, endTime: endMs, reverse: true, next_key: nextKey };
+    return this.call("data/get_fitness_data_by_time", { data: JSON.stringify(data) });
+  }
+  async getFitnessAll(key, startMs, endMs, maxPages = 40) {
+    const apiStart = Math.max(startMs, endMs - 86400000);
+    const r = await this._pagedAll((nk) => this.getFitnessByTime(key, apiStart, endMs, nk), "data_list", startMs, endMs, maxPages, key);
+    return { data_list: r.items, has_more: r.hasMore };
+  }
+  getSportByTime(startMs, endMs, nextKey = null) {
+    const data = { startTime: startMs, endTime: endMs, next_key: nextKey, limit: 50, reverse: true };
+    return this.call("data/get_sport_records_by_time", { data: JSON.stringify(data) });
+  }
+  async getSportAll(startMs, endMs, maxPages = 20) {
+    const apiStart = Math.max(startMs, endMs - 86400000);
+    const r = await this._pagedAll((nk) => this.getSportByTime(apiStart, endMs, nk), "sport_records", startMs, endMs, maxPages, null);
+    return { sport_records: r.items, has_more: r.hasMore };
+  }
+}
+function miDecode(item) {
+  try { const d = JSON.parse((item && item.value) || "{}"); return d && typeof d === "object" && !Array.isArray(d) ? d : {}; }
+  catch (e) { return {}; }
+}
+function miLocalDatetime(raw) {
+  try {
+    let stamp = parseFloat(raw);
+    if (!isFinite(stamp)) return null;
+    if (stamp > 100000000000) stamp /= 1000;
+    const d = new Date(stamp * 1000);
+    const parts = {};
+    for (const p of new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).formatToParts(d)) parts[p.type] = p.value;
+    const hh = parts.hour === "24" ? "00" : parts.hour;
+    return `${parts.year}-${parts.month}-${parts.day}T${hh}:${parts.minute}:${parts.second}`;
+  } catch (e) { return null; }
+}
+function miIsNum(v) { return typeof v === "number" && isFinite(v); }
+async function miReadMetrics(session, startMs, endMs) {
+  const client = new MiHealthClient(session.ssecurity, session.service_token, session.cuser_id, session.region || "cn");
+  const readings = [];
+  for (const key of ["weight", "sleep", "steps", "calories"]) {
+    const result = await client.getFitnessAll(key, startMs, endMs, 40);
+    if (result.has_more) throw new MiErr("小米健康记录较多，请缩短同步日期范围后重试");
+    for (const item of result.data_list) {
+      const detail = miDecode(item);
+      const timestamp = item.time || detail.time || detail.wake_time;
+      const recordedAt = miLocalDatetime(timestamp);
+      if (!recordedAt) continue;
+      if (key === "calories") {
+        const cal = detail.calories !== undefined && detail.calories !== null ? detail.calories
+          : (detail.energy !== undefined && detail.energy !== null ? detail.energy : detail.calorie);
+        if (miIsNum(cal) && cal >= 0) readings.push({
+          source_id: `calories:${item.sid || "xiaomi"}:${timestamp}`, metric: "calories",
+          recorded_at: recordedAt, value: Math.round(cal * 10) / 10, unit: "kcal", payload: detail });
+        continue;
+      }
+      if (key === "steps") {
+        const count = detail.steps;
+        if (miIsNum(count) && count >= 0) readings.push({
+          source_id: `steps:${item.time}`, metric: "steps", recorded_at: recordedAt,
+          value: parseFloat(count), unit: "steps", payload: { source: item.sid || "xiaomi" } });
+        continue;
+      }
+      let metric, value, unit;
+      if (key === "weight") { metric = "weight"; value = detail.weight; unit = "kg"; }
+      else {
+        const mins = ["sleep_deep_duration", "sleep_light_duration", "sleep_rem_duration"]
+          .reduce((acc, f) => acc + (parseFloat(detail[f]) || 0), 0);
+        metric = "sleep_hours"; value = Math.round((mins / 60) * 100) / 100; unit = "h";
+      }
+      if (miIsNum(value) && value >= 0) readings.push({
+        source_id: `${key}:${item.sid || "xiaomi"}:${timestamp}`, metric,
+        recorded_at: recordedAt, value: parseFloat(value), unit, payload: detail });
+    }
+  }
+  const sport = await client.getSportAll(startMs, endMs, 20);
+  if (sport.has_more) throw new MiErr("小米运动记录较多，请缩短同步日期范围后重试");
+  for (const item of sport.sport_records) {
+    const detail = miDecode(item);
+    const recordedAt = miLocalDatetime(item.time);
+    const duration = detail.duration;
+    if (!recordedAt || !miIsNum(duration) || duration <= 0) continue;
+    const activity = String(detail.sport_type || item.category || item.key || "运动").slice(0, 40);
+    const cal = detail.calories || detail.calorie;
+    const calVal = miIsNum(cal) && cal > 0 ? Math.round(cal * 10) / 10 : null;
+    readings.push({
+      source_id: `workout:${item.sid || "xiaomi"}:${item.time}:${item.key || ""}`, metric: "workout_minutes",
+      recorded_at: recordedAt, value: Math.round((duration / 60) * 10) / 10, unit: "min",
+      payload: { kind: activity, duration_seconds: duration, calories: calVal } });
+    if (calVal) readings.push({
+      source_id: `workout_cal:${item.sid || "xiaomi"}:${item.time}:${item.key || ""}`, metric: "calories",
+      recorded_at: recordedAt, value: calVal, unit: "kcal", payload: { kind: activity, from_workout: true } });
+  }
+  return readings;
 }

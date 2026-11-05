@@ -1,9 +1,7 @@
 package art.qelora.welltrack.pages;
 
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.app.DatePickerDialog;
-import android.app.TimePickerDialog;
+import android.app.Dialog;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.Intent;
@@ -48,6 +46,7 @@ import art.qelora.welltrack.MainActivity;
 import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.Foods;
 import art.qelora.welltrack.ui.BasePage;
+import art.qelora.welltrack.ui.Sheet;
 import art.qelora.welltrack.ui.Ui;
 
 /**
@@ -57,7 +56,7 @@ import art.qelora.welltrack.ui.Ui;
  * 历史区 (总数副标题 + 三段筛选 + 彩色指标标签)。
  * 接口不变: POST /api/v1/records; GET /api/v1/records?limit=60;
  * 导出 /api/v1/export.csv 与 /api/v1/backup 写应用下载目录。
- * v2.8 睡眠记录完善: 入睡/起床时间选择 (TimePickerDialog, 跨夜自动算时长,
+ * v2.8 睡眠记录完善: 入睡/起床时间选择 (Sheet 步进选择器, 跨夜自动算时长,
  * 时长写入 sleep_hours 随记录保存; 入睡/起床时刻仅存本机 SharedPreferences,
  * 不新增后端字段); 对照行复用 records 列表的 mihealth_sleep_hours
  * (Worker 合并口径, FastAPI 记录列表无此字段时对照行自动隐藏, 不误报)。
@@ -96,11 +95,10 @@ public class RecordsPage extends BasePage {
 
     /* v2.3 饮食记录: 今日条目列表 + 合计 (接口 /api/v1/diet) */
     private static final int REQ_GALLERY = 4101;
-    private static final int REQ_CAMERA = 4102;
     private LinearLayout dietListBox;
     private TextView dietSummaryView;
     private final List<JSONObject> dietEntries = new ArrayList<>();
-    private AlertDialog photoProgressDialog;
+    private Dialog photoProgressDialog;
 
     /** 选图/拍照结果监听: onShow 注册到 MainActivity, onHide 注销 */
     private final MainActivity.ActivityResultListener resultListener =
@@ -261,7 +259,7 @@ public class RecordsPage extends BasePage {
         pickFoodBtn.setOnClickListener(v -> showFoodPicker());
         dietBtnRow.addView(pickFoodBtn, Ui.weight1());
         Button photoBtn = Ui.primaryButton(c, "📷 拍照识别");
-        photoBtn.setOnClickListener(v -> showPhotoSource());
+        photoBtn.setOnClickListener(v -> openPhotoSource());
         LinearLayout.LayoutParams photoLp = Ui.weight1();
         photoLp.leftMargin = Ui.dp(c, 10);
         dietBtnRow.addView(photoBtn, photoLp);
@@ -331,10 +329,17 @@ public class RecordsPage extends BasePage {
         content.addView(historyList, Ui.matchWrap(8, c));
     }
 
+    /** v3.1 自研相机页回调: 拍摄完成直接拿到全分辨率照片; 相册走原有选图流程 */
+    private final MainActivity.CameraListener cameraListener = new MainActivity.CameraListener() {
+        @Override public void onCaptured(Bitmap bmp) { recognizeFoodPhoto(bmp); }
+        @Override public void onGallery() { openGalleryPicker(); }
+    };
+
     @Override
     public void onShow() {
         super.onShow();
         activity().setActivityResultListener(resultListener);
+        activity().setCameraListener(cameraListener);
         load();
         loadDiet();
     }
@@ -343,6 +348,7 @@ public class RecordsPage extends BasePage {
     public void onHide() {
         super.onHide();
         activity().clearActivityResultListener(resultListener);
+        activity().clearCameraListener(cameraListener);
     }
 
     /* ---------- 控件小工厂 ---------- */
@@ -502,14 +508,15 @@ public class RecordsPage extends BasePage {
     private void pickSleepTime(final boolean isBedtime) {
         int initial = isBedtime ? (bedtimeMin >= 0 ? bedtimeMin : 23 * 60)
                 : (wakeupMin >= 0 ? wakeupMin : 7 * 60);
-        new TimePickerDialog(ctx(), (view, hour, minute) -> {
+        Sheet.timePicker(ctx(), isBedtime ? "🌙 入睡时间" : "☀️ 起床时间",
+                initial / 60, initial % 60, (hour, minute) -> {
             int value = hour * 60 + minute;
             if (isBedtime) bedtimeMin = value; else wakeupMin = value;
             sleepPrefs().edit().putInt(recordDate + "_bed", bedtimeMin)
                     .putInt(recordDate + "_wake", wakeupMin).apply();
             refreshSleepTimeLabels();
             fillSleepFromTimes(true);
-        }, initial / 60, initial % 60, true).show();
+        });
     }
 
     private void refreshSleepTimeLabels() {
@@ -629,22 +636,23 @@ public class RecordsPage extends BasePage {
 
     private void showWaterCustomDialog() {
         Context c = ctx();
-        final EditText input = new EditText(c);
-        input.setInputType(InputType.TYPE_CLASS_NUMBER);
-        input.setHint("输入毫升数，如 500");
-        int p = Ui.dp(c, 16);
-        input.setPadding(p, p, p, p);
-        new AlertDialog.Builder(c)
-                .setTitle("自定义饮水量")
-                .setView(input)
-                .setPositiveButton("记入今日", (d, w) -> {
-                    String s = input.getText().toString().trim();
-                    int amount;
-                    try { amount = Integer.parseInt(s); } catch (Exception e) { toast("请输入数字"); return; }
-                    addWaterQuick(amount);
-                })
-                .setNegativeButton("取消", null)
-                .show();
+        LinearLayout box = Ui.column(c);
+        int p = Ui.dp(c, 20);
+        box.setPadding(p, Ui.dp(c, 6), p, p);
+        box.addView(Ui.text(c, "自定义饮水量", 17, Ui.INK, true), Ui.matchWrap(10, c));
+        final EditText input = Ui.input(c, "输入毫升数，如 500", InputType.TYPE_CLASS_NUMBER);
+        box.addView(input, Ui.matchWrap(6, c));
+        final Dialog[] holder = new Dialog[1];
+        android.widget.Button ok = Ui.primaryButton(c, "记入今日");
+        ok.setOnClickListener(v -> {
+            String t = input.getText().toString().trim();
+            int amount;
+            try { amount = Integer.parseInt(t); } catch (Exception e) { toast("请输入数字"); return; }
+            Sheet.close(holder[0]);
+            addWaterQuick(amount);
+        });
+        box.addView(ok, Ui.matchWrap(12, c));
+        holder[0] = Sheet.bottom(c, box);
     }
 
     private void updateSaveButton() {
@@ -810,7 +818,7 @@ public class RecordsPage extends BasePage {
         return null;
     }
 
-    private LinearLayout foodRow(final Foods.Food food, final AlertDialog[] holder,
+    private LinearLayout foodRow(final Foods.Food food, final Dialog[] holder,
                                  final Runnable refresh) {
         Context c = ctx();
         LinearLayout rowLayout = Ui.row(c);
@@ -835,7 +843,7 @@ public class RecordsPage extends BasePage {
     }
 
     /** 按当前搜索词重绘食物列表: 无搜索词时分「收藏 / 最近使用 / 全部」三段, 有词时过滤并把收藏与最近排前面 */
-    private void renderFoodList(LinearLayout list, String query, final AlertDialog[] holder,
+    private void renderFoodList(LinearLayout list, String query, final Dialog[] holder,
                                 final Runnable refresh) {
         Context c = ctx();
         list.removeAllViews();
@@ -888,18 +896,24 @@ public class RecordsPage extends BasePage {
     /** v3.0 首页快捷入口: 直接打开食物选择 (配合 MainActivity.goRecordsDiet 使用) */
     public void openFoodPicker() { showFoodPicker(); }
 
-    /** v3.0 首页快捷入口: 直接打开拍照识别来源选择 */
-    public void openPhotoSource() { showPhotoSource(); }
+    /** v3.0/v3.1 首页快捷入口: 直接打开自研相机页 (内含相册入口) */
+    public void openPhotoSource() { activity().openCamera(); }
+
+    private void openGalleryPicker() {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("image/*");
+        activity().startActivityForResult(
+                Intent.createChooser(intent, "选择一张食物照片"), REQ_GALLERY);
+    }
 
     private void showFoodPicker() {
         Context c = ctx();
         LinearLayout list = Ui.column(c);
-        list.setBackgroundColor(Ui.CARD);
         int p = Ui.dp(c, 8);
         list.setPadding(p, p, p, p);
         ScrollView sv = new ScrollView(c);
         sv.addView(list);
-        final AlertDialog[] holder = new AlertDialog[1];
+        final Dialog[] holder = new Dialog[1];
         final EditText[] searchHolder = new EditText[1];
         final Runnable[] refreshHolder = new Runnable[1];
         refreshHolder[0] = () -> renderFoodList(list,
@@ -916,16 +930,15 @@ public class RecordsPage extends BasePage {
             }
         });
         LinearLayout box = Ui.column(c);
-        box.setBackgroundColor(Ui.CARD);
+        int bp = Ui.dp(c, 18);
+        box.setPadding(bp, Ui.dp(c, 4), bp, Ui.dp(c, 14));
+        TextView pickerTitle = Ui.text(c, "选择食物", 17, Ui.INK, true);
+        box.addView(pickerTitle, Ui.matchWrap(8, c));
         box.addView(search, Ui.matchWrap(6, c));
         LinearLayout.LayoutParams svLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(c, 420));
         box.addView(sv, svLp);
-        holder[0] = new AlertDialog.Builder(c)
-                .setTitle("选择食物")
-                .setView(box)
-                .setNegativeButton("取消", null)
-                .show();
+        holder[0] = Sheet.bottom(c, box);
     }
 
     /** 克数步进小部件: 一行 [−50][−10] 数值 [+10][+50], 变化时回调 */
@@ -970,6 +983,7 @@ public class RecordsPage extends BasePage {
         box.setBackgroundColor(Ui.CARD);
         int p = Ui.dp(c, 16);
         box.setPadding(p, p, p, p);
+        box.addView(Ui.text(c, "这一份有多重？", 17, Ui.INK, true), Ui.matchWrap(6, c));
         box.addView(Ui.text(c, food.emoji + " " + food.name + " · " + food.kcalPer100g + " 千卡/100g",
                 13, Ui.SLATE, false));
         final TextView kcalPreview = Ui.text(c, "", 20, Ui.CAL_TEXT, true);
@@ -978,57 +992,24 @@ public class RecordsPage extends BasePage {
         box.addView(gramsStepper(grams, refresh), Ui.matchWrap(12, c));
         box.addView(kcalPreview, Ui.matchWrap(10, c));
         refresh.run();
-        new AlertDialog.Builder(c)
-                .setTitle("这一份有多重？")
-                .setView(box)
-                .setPositiveButton("记入今日", (d, w) -> {
-                    recordRecentFood(food.name);
-                    addDietEntry(food.name, grams[0], Foods.kcalFor(food, grams[0]), "manual");
-                })
-                .setNegativeButton("取消", null)
-                .show();
+        final Dialog[] holder = new Dialog[1];
+        android.widget.Button ok = Ui.primaryButton(c, "记入今日");
+        ok.setOnClickListener(v -> {
+            Sheet.close(holder[0]);
+            recordRecentFood(food.name);
+            addDietEntry(food.name, grams[0], Foods.kcalFor(food, grams[0]), "manual");
+        });
+        box.addView(ok, Ui.matchWrap(12, c));
+        holder[0] = Sheet.bottom(c, box);
     }
 
     /* ----- 拍照识别: 选图/拍照 → 压缩 Base64 → AI 识别 → 确认入账 ----- */
-    private void showPhotoSource() {
-        new AlertDialog.Builder(ctx())
-                .setTitle("拍照识别热量")
-                .setItems(new String[]{"📷 拍照", "🖼️ 从相册选"}, (d, which) -> {
-                    if (which == 0) {
-                        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-                        activity().startActivityForResult(intent, REQ_CAMERA);
-                    } else {
-                        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
-                        intent.setType("image/*");
-                        activity().startActivityForResult(
-                                Intent.createChooser(intent, "选择一张食物照片"), REQ_GALLERY);
-                    }
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
     private void handleActivityResult(int requestCode, int resultCode, Intent data) {
         if (resultCode != Activity.RESULT_OK || data == null) return;
         if (requestCode == REQ_GALLERY && data.getData() != null) {
             Bitmap bmp = decodeUriScaled(data.getData(), 1024);
             if (bmp == null) { toast("图片读取失败，换一张试试"); return; }
             recognizeFoodPhoto(bmp);
-        } else if (requestCode == REQ_CAMERA) {
-            Object extra = data.getExtras() != null ? data.getExtras().get("data") : null;
-            if (extra instanceof Bitmap) {
-                Bitmap bmp = (Bitmap) extra;
-                // 缩略图偏小时放大到最长边 512, 提高识别可用性
-                int maxSide = Math.max(bmp.getWidth(), bmp.getHeight());
-                if (maxSide > 0 && maxSide < 512) {
-                    double scale = 512.0 / maxSide;
-                    bmp = Bitmap.createScaledBitmap(bmp,
-                            (int) (bmp.getWidth() * scale), (int) (bmp.getHeight() * scale), true);
-                }
-                recognizeFoodPhoto(bmp);
-            } else {
-                toast("没有取得照片，再试一次");
-            }
         }
     }
 
@@ -1076,10 +1057,8 @@ public class RecordsPage extends BasePage {
         TextView t = Ui.text(c, "🤖 AI 正在识别食物与热量…", 14.5f, Ui.INK, false);
         t.setGravity(Gravity.CENTER);
         box.addView(t);
-        photoProgressDialog = new AlertDialog.Builder(c)
-                .setView(box)
-                .setCancelable(false)
-                .show();
+        photoProgressDialog = Sheet.center(c, box);
+        photoProgressDialog.setCancelable(false);
 
         api().agentFoodPhoto(b64, new ApiClient.Callback() {
             @Override public void onOk(JSONObject data, int status) {
@@ -1135,9 +1114,9 @@ public class RecordsPage extends BasePage {
         }
 
         LinearLayout box = Ui.column(c);
-        box.setBackgroundColor(Ui.CARD);
         int p = Ui.dp(c, 14);
-        box.setPadding(p, p, p, p);
+        box.setPadding(p, Ui.dp(c, 2), p, p);
+        box.addView(Ui.text(c, "确认识别结果", 17, Ui.INK, true), Ui.matchWrap(8, c));
         String note = data.optString("note", "");
         if (!note.isEmpty()) {
             box.addView(Ui.text(c, "🤖 " + note, 12, Ui.SLATE, false));
@@ -1191,12 +1170,14 @@ public class RecordsPage extends BasePage {
         box.addView(totalView, Ui.matchWrap(10, c));
         refreshTotal.run();
 
-        new AlertDialog.Builder(c)
-                .setTitle("确认识别结果")
-                .setView(box)
-                .setPositiveButton("全部记入今日", (d, w) -> savePhotoItems(items))
-                .setNegativeButton("取消", null)
-                .show();
+        final Dialog[] holder = new Dialog[1];
+        android.widget.Button ok = Ui.primaryButton(c, "全部记入今日");
+        ok.setOnClickListener(v -> {
+            Sheet.close(holder[0]);
+            savePhotoItems(items);
+        });
+        box.addView(ok, Ui.matchWrap(12, c));
+        holder[0] = Sheet.bottom(c, box);
     }
 
     /** 把确认后的识别结果逐条入账 (source=photo), 全部完成后刷新列表 */
@@ -1372,11 +1353,11 @@ public class RecordsPage extends BasePage {
             m = Integer.parseInt(recordDate.substring(5, 7)) - 1;
             d = Integer.parseInt(recordDate.substring(8, 10));
         }
-        new DatePickerDialog(ctx(), (view, yy, mm, dd) -> {
-            recordDate = String.format(Locale.US, "%04d-%02d-%02d", yy, mm + 1, dd);
+        Sheet.datePicker(ctx(), "记录日期", y, m + 1, d, (yy, mm, dd) -> {
+            recordDate = String.format(Locale.US, "%04d-%02d-%02d", yy, mm, dd);
             if (dateValueView != null) dateValueView.setText(recordDate);
             updateDateFlags();
-        }, y, m, d).show();
+        });
     }
 
     private List<String> selectedHabits() {

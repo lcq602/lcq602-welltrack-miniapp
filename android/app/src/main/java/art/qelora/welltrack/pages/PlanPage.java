@@ -1,7 +1,5 @@
 package art.qelora.welltrack.pages;
 
-import android.app.DatePickerDialog;
-import android.app.TimePickerDialog;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -27,6 +25,7 @@ import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.PlanStore;
 import art.qelora.welltrack.health.Reminders;
 import art.qelora.welltrack.ui.BasePage;
+import art.qelora.welltrack.ui.Sheet;
 import art.qelora.welltrack.ui.Ui;
 
 /**
@@ -213,11 +212,11 @@ public class PlanPage extends BasePage {
                 13, Ui.SLATE, false), Ui.matchWrap(6, c));
         LinearLayout row = Ui.row(c);
         Button timeBtn = Ui.ghostButton(c, "提醒时间：" + Reminders.timeText(c) + " · 修改");
-        timeBtn.setOnClickListener(v -> new TimePickerDialog(c,
-                (view, hour, minute) -> {
+        timeBtn.setOnClickListener(v -> Sheet.timePicker(c, "提醒时间",
+                Reminders.hour(c), Reminders.minute(c), (hour, minute) -> {
                     Reminders.setTime(c, hour, minute);
                     renderBody();
-                }, Reminders.hour(c), Reminders.minute(c), true).show());
+                }));
         row.addView(timeBtn, Ui.weight1());
         Button toggle = enabled ? Ui.ghostButton(c, "关闭提醒") : Ui.primaryButton(c, "开启提醒");
         toggle.setOnClickListener(v -> {
@@ -695,8 +694,8 @@ public class PlanPage extends BasePage {
             m = Integer.parseInt(current.substring(5, 7)) - 1;
             d = Integer.parseInt(current.substring(8, 10));
         }
-        new DatePickerDialog(ctx(), (view, yy, mm, dd) -> {
-            String val = String.format(Locale.US, "%04d-%02d-%02d", yy, mm + 1, dd);
+        Sheet.datePicker(ctx(), isStart ? "开始日期" : "目标日期", y, m + 1, d, (yy, mm, dd) -> {
+            String val = String.format(Locale.US, "%04d-%02d-%02d", yy, mm, dd);
             if (isStart) {
                 startDate = val;
                 if (startDateView != null) startDateView.setText(val + "  📅");
@@ -704,7 +703,7 @@ public class PlanPage extends BasePage {
                 targetDate = val;
                 if (targetDateView != null) targetDateView.setText(val + "  📅");
             }
-        }, y, m, d).show();
+        });
     }
 
     private void save() {

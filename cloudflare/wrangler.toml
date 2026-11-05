@@ -12,6 +12,9 @@ database_id = "fac4aade-22ac-4e32-a7ca-60bb91defccc"
 binding = "AI"
 
 [vars]
-MIHEALTH_ENABLED = "false"
+MIHEALTH_ENABLED = "true"
 AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+
+[triggers]
+crons = ["*/10 * * * *"]
 # 密钥类变量不要写在这里: 用 `wrangler secret put MIHEALTH_TOKEN_KEY` / WECHAT_APP_SECRET 设置

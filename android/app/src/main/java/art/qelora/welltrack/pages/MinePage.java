@@ -1,6 +1,6 @@
 package art.qelora.welltrack.pages;
 
-import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.Context;
 import android.graphics.Color;
 import android.text.Editable;
@@ -26,6 +26,7 @@ import art.qelora.welltrack.api.ApiClient;
 import art.qelora.welltrack.health.Insights;
 import art.qelora.welltrack.health.Streak;
 import art.qelora.welltrack.ui.BasePage;
+import art.qelora.welltrack.ui.Sheet;
 import art.qelora.welltrack.ui.Ui;
 
 /**
@@ -450,7 +451,7 @@ public class MinePage extends BasePage {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                     : Ui.matchWrap(10, ctx()));
         }
-        TextView note = Ui.text(ctx(), "💡 体重自动更新；睡眠、步数和运动摘要可通过下方按钮手动同步。",
+        TextView note = Ui.text(ctx(), "💡 已连接后，后端每 10 分钟自动同步一次手环数据，不用手动点；下方按钮可立即同步最近两周。",
                 11, Ui.MUTED, false);
         miBox.addView(note, Ui.matchWrap(12, ctx()));
         if (!miReady) {
@@ -460,7 +461,7 @@ public class MinePage extends BasePage {
             warn.setPadding(Ui.dp(ctx(), 10), Ui.dp(ctx(), 10), Ui.dp(ctx(), 10), Ui.dp(ctx(), 10));
             miBox.addView(warn, Ui.matchWrap(10, ctx()));
         }
-        Button syncBtn = Ui.primaryButton(ctx(), syncing ? "同步中…" : "手动同步最近两周摘要");
+        Button syncBtn = Ui.primaryButton(ctx(), syncing ? "同步中…" : "立即同步最近两周摘要");
         syncBtn.setEnabled(!syncing && miReady);
         syncBtn.setAlpha(syncBtn.isEnabled() ? 1f : 0.55f);
         syncBtn.setOnClickListener(v -> syncMiHealth());
@@ -567,16 +568,14 @@ public class MinePage extends BasePage {
     /* ---------------- 小米操作 (与 mine.js 流程一致) ---------------- */
 
     private void connectMiHealth(final EditText userInput, final EditText passInput) {
-        if (!miReady) { toast("请先在本机后端启用连接器并设置加密密钥"); return; }
+        if (!miReady) { toast("小米连接暂未就绪，请稍后再试"); return; }
         if (connecting) return;
         final String username = userInput.getText().toString().trim();
         final String password = passInput.getText().toString();
         if (username.isEmpty() || password.isEmpty()) { toast("请填写小米账号和密码"); return; }
-        new AlertDialog.Builder(ctx())
-                .setTitle("连接小米运动健康")
-                .setMessage("仅用于读取你本人账号的健康摘要。登录信息会由本机后端提交给小米，不会保存在本小程序中。此连接依赖非官方接口。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("继续连接", (dialog, which) -> {
+        Sheet.confirm(ctx(), "连接小米运动健康",
+                "仅用于读取你本人账号的健康摘要。账号密码只会经 Cloudflare 后端提交给小米官方登录，不会保存在手机上；后端只保存加密后的登录会话。此连接依赖非官方接口。",
+                "继续连接", () -> {
                     connecting = true;
                     passInput.setText("");
                     renderMi();
@@ -605,8 +604,7 @@ public class MinePage extends BasePage {
                             renderMi();
                         }
                     });
-                })
-                .show();
+                });
     }
 
     private void verifyMiHealthCode() {
@@ -660,11 +658,9 @@ public class MinePage extends BasePage {
     }
 
     private void unbindMiHealth() {
-        new AlertDialog.Builder(ctx())
-                .setTitle("解除小米健康连接？")
-                .setMessage("将移除本机保存的加密登录会话；已经同步到本机的只读记录会保留。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("解除连接", (dialog, which) ->
+        Sheet.confirm(ctx(), "解除小米健康连接？",
+                "将移除后端保存的加密登录会话；已经同步的只读记录会保留。解除后每 10 分钟自动同步也会停止。",
+                "解除连接", () ->
                         api().request("/api/v1/integrations/mihealth/connection", "DELETE", null, new ApiClient.Callback() {
                             @Override public void onOk(JSONObject data, int status) {
                                 toast("已解除连接");
@@ -673,7 +669,6 @@ public class MinePage extends BasePage {
                             @Override public void onError(String message) {
                                 toast((message == null || message.isEmpty()) ? "解绑失败" : message);
                             }
-                        }))
-                .show();
+                        }));
     }
 }

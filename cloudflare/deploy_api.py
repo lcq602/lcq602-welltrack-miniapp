@@ -63,7 +63,7 @@ def main():
         "bindings": [
             {"type": "d1", "name": "DB", "id": db_id},
             {"type": "ai", "name": "AI"},
-            {"type": "plain_text", "name": "MIHEALTH_ENABLED", "text": "false"},
+            {"type": "plain_text", "name": "MIHEALTH_ENABLED", "text": "true"},
             {"type": "plain_text", "name": "AI_MODEL", "text": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"},
         ],
         "observability": {"enabled": True},

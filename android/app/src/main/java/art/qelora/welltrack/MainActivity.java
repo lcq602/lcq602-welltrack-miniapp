@@ -1,6 +1,8 @@
 package art.qelora.welltrack;
 
 import android.app.Activity;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -13,6 +15,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import art.qelora.welltrack.pages.AgentPage;
+import art.qelora.welltrack.pages.CameraPage;
 import art.qelora.welltrack.pages.AnalysisPage;
 import art.qelora.welltrack.pages.ExercisePage;
 import art.qelora.welltrack.pages.IndexPage;
@@ -54,6 +57,53 @@ public class MainActivity extends Activity {
 
     public void clearActivityResultListener(ActivityResultListener listener) {
         if (this.activityResultListener == listener) this.activityResultListener = null;
+    }
+
+    /** 自研相机页回调 (v3.1): 记录页 onShow 注册、onHide 注销 */
+    public interface CameraListener {
+        void onCaptured(Bitmap bmp);
+        void onGallery();
+    }
+
+    private CameraListener cameraListener;
+
+    public void setCameraListener(CameraListener listener) { this.cameraListener = listener; }
+
+    public void clearCameraListener(CameraListener listener) {
+        if (this.cameraListener == listener) this.cameraListener = null;
+    }
+
+    public void deliverCameraPhoto(Bitmap bmp) {
+        if (cameraListener != null) cameraListener.onCaptured(bmp);
+    }
+
+    public void deliverCameraGallery() {
+        if (cameraListener != null) cameraListener.onGallery();
+    }
+
+    /* 相机权限: 授权后回调 granted, 拒绝回调 denied */
+    private static final int REQ_PERM_CAMERA = 77;
+    private Runnable permGranted, permDenied;
+
+    public void ensureCameraPermission(Runnable granted, Runnable denied) {
+        if (checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            granted.run();
+            return;
+        }
+        permGranted = granted;
+        permDenied = denied;
+        requestPermissions(new String[]{android.Manifest.permission.CAMERA}, REQ_PERM_CAMERA);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_PERM_CAMERA) return;
+        Runnable g = permGranted, d = permDenied;
+        permGranted = null; permDenied = null;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (g != null) g.run();
+        } else if (d != null) d.run();
     }
 
     @Override
@@ -189,6 +239,14 @@ public class MainActivity extends Activity {
     }
 
     /** 打开健康智能体覆盖页 (与运动页同一覆盖层机制, 返回键/关闭逻辑通用) */
+    public void openCamera() {
+        if (overlayPage != null) return;
+        overlayPage = new CameraPage(this);
+        pageHost.addView(overlayPage, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        overlayPage.onShow();
+    }
+
     public void openAgent() {
         if (overlayPage != null) return;
         overlayPage = new AgentPage(this);

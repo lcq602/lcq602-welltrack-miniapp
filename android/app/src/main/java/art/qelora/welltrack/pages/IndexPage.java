@@ -1,7 +1,6 @@
 package art.qelora.welltrack.pages;
 
-import android.app.AlertDialog;
-import android.app.DatePickerDialog;
+import android.app.Dialog;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
@@ -44,6 +43,7 @@ import art.qelora.welltrack.health.PlanStore;
 import art.qelora.welltrack.health.Reminders;
 import art.qelora.welltrack.health.Streak;
 import art.qelora.welltrack.ui.BasePage;
+import art.qelora.welltrack.ui.Sheet;
 import art.qelora.welltrack.ui.Ui;
 import art.qelora.welltrack.ui.ScoreRing;
 
@@ -861,22 +861,23 @@ public class IndexPage extends BasePage {
 
     private void showWaterCustomDialog() {
         Context c = ctx();
-        final EditText input = new EditText(c);
-        input.setInputType(InputType.TYPE_CLASS_NUMBER);
-        input.setHint("输入毫升数，如 500");
-        int p = Ui.dp(c, 16);
-        input.setPadding(p, p, p, p);
-        new AlertDialog.Builder(c)
-                .setTitle("自定义饮水量")
-                .setView(input)
-                .setPositiveButton("记入今日", (d, w) -> {
-                    String s = input.getText().toString().trim();
-                    int amount;
-                    try { amount = Integer.parseInt(s); } catch (Exception e) { toast("请输入数字"); return; }
-                    addWater(amount);
-                })
-                .setNegativeButton("取消", null)
-                .show();
+        LinearLayout box = Ui.column(c);
+        int p = Ui.dp(c, 20);
+        box.setPadding(p, Ui.dp(c, 6), p, p);
+        box.addView(Ui.text(c, "自定义饮水量", 17, Ui.INK, true), Ui.matchWrap(10, c));
+        final EditText input = Ui.input(c, "输入毫升数，如 500", InputType.TYPE_CLASS_NUMBER);
+        box.addView(input, Ui.matchWrap(6, c));
+        final Dialog[] holder = new Dialog[1];
+        android.widget.Button ok = Ui.primaryButton(c, "记入今日");
+        ok.setOnClickListener(v -> {
+            String t = input.getText().toString().trim();
+            int amount;
+            try { amount = Integer.parseInt(t); } catch (Exception e) { toast("请输入数字"); return; }
+            Sheet.close(holder[0]);
+            addWater(amount);
+        });
+        box.addView(ok, Ui.matchWrap(12, c));
+        holder[0] = Sheet.bottom(c, box);
     }
 
     /* v2.6 连续打卡卡: 火焰天数 + 本周记录点 + 下一徽章提示, 点击去记录页 */
@@ -1438,9 +1439,9 @@ public class IndexPage extends BasePage {
                     c.set(Calendar.DAY_OF_MONTH, Integer.parseInt(value.substring(8, 10)));
                 } catch (Exception ignored) {}
             }
-            new DatePickerDialog(ctx(), (dp, y, m, d) ->
-                    setter.set(String.format(Locale.US, "%04d-%02d-%02d", y, m + 1, d)),
-                    c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show();
+            Sheet.datePicker(ctx(), "选择日期",
+                    c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH),
+                    (y, m, d) -> setter.set(String.format(Locale.US, "%04d-%02d-%02d", y, m, d)));
         });
         return tv;
     }
